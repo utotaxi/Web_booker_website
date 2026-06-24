@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f6f8;
+  --foreground: #1a2b4a;
+  --navy: #1a2b4a;
+  --navy-dark: #132038;
+  --accent: #f5c518;
+  --accent-light: #fef9e7;
+  --page: #f0f1f3;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-navy: var(--navy);
+  --color-navy-dark: var(--navy-dark);
+  --color-accent: var(--accent);
+  --color-accent-light: var(--accent-light);
+  --color-page: var(--page);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--page);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+select {
+  cursor: pointer;
+}
+
+/* Google Places Autocomplete dropdown */
+.pac-container {
+  z-index: 10000 !important;
+  margin-top: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-family: inherit;
+}
+
+.pac-item {
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pac-item:hover,
+.pac-item-selected {
+  background-color: #f0f4f8;
+}
+
+.pac-icon {
+  margin-top: 4px;
+}
