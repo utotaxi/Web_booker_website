@@ -251,6 +251,10 @@ export async function POST(req: NextRequest) {
       pricing_breakdown: quote.pricing_breakdown,
       quote_source: quote.distance_source,
       quote_currency: quote.currency,
+      name:
+        payload.first_name || payload.last_name
+          ? `${payload.first_name ?? ""} ${payload.last_name ?? ""}`.trim()
+          : null,
       first_name: payload.first_name ?? null,
       last_name: payload.last_name ?? null,
       email: payload.email ?? null,

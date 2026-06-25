@@ -538,26 +538,43 @@ export default function WebBooker() {
       <div className="mx-auto w-full max-w-3xl px-4 py-10">
         <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
           <div className="bg-navy px-6 py-4">
-            <h2 className="text-lg font-semibold text-white">Booking Request Received</h2>
+            <h2 className="text-lg font-semibold text-white">Booking Confirmed</h2>
           </div>
           <div className="space-y-4 p-6">
             <p className="text-gray-700">
-              Your <strong>{selectedVehicle.name}</strong> booking request has been submitted.
-              We will contact you shortly.
+              Your booking has been confirmed! Shortly you will receive updates about
+              your driver assigned details.
+              <br />
+              Thank you for choosing us.
             </p>
             <div className="rounded-md bg-gray-50 p-4 text-sm text-gray-600">
+              {(personal.firstName || personal.lastName) && (
+                <p>
+                  <strong>Name:</strong>{" "}
+                  {`${personal.firstName} ${personal.lastName}`.trim()}
+                </p>
+              )}
+              {personal.email && (
+                <p><strong>Email:</strong> {personal.email}</p>
+              )}
+              {personal.phone && (
+                <p><strong>Phone:</strong> {personal.phone}</p>
+              )}
               <p><strong>Pickup:</strong> {pickup}</p>
+              {activeStops.length > 0 && (
+                <p><strong>Additional stops:</strong> {activeStops.join(", ")}</p>
+              )}
               <p><strong>Dropoff:</strong> {dropoff}</p>
               <p><strong>Date & Time:</strong> {pickupDisplay}</p>
               <p><strong>Vehicle:</strong> {selectedVehicle.name}</p>
               <p><strong>Passengers:</strong> {passengers}</p>
               <p><strong>Luggage:</strong> {luggage}</p>
-              {activeStops.length > 0 && (
-                <p><strong>Additional stops:</strong> {activeStops.join(", ")}</p>
-              )}
               {showReturn && (
                 <>
                   <p className="pt-1"><strong>Return pickup:</strong> {returnPickup}</p>
+                  {activeReturnStops.length > 0 && (
+                    <p><strong>Return stops:</strong> {activeReturnStops.join(", ")}</p>
+                  )}
                   <p><strong>Return dropoff:</strong> {returnDropoff}</p>
                   <p>
                     <strong>Return date & time:</strong>{" "}
@@ -565,9 +582,6 @@ export default function WebBooker() {
                   </p>
                   <p><strong>Return passengers:</strong> {returnPassengers}</p>
                   <p><strong>Return luggage:</strong> {returnLuggage}</p>
-                  {activeReturnStops.length > 0 && (
-                    <p><strong>Return stops:</strong> {activeReturnStops.join(", ")}</p>
-                  )}
                 </>
               )}
               {confirmedQuote && (
@@ -626,14 +640,14 @@ export default function WebBooker() {
             <h3 className="text-base font-semibold text-navy">Outbound Journey</h3>
             <div className="mt-3 space-y-1 text-sm text-gray-700">
               <p><strong>Pickup:</strong> {pickup}</p>
+              {activeStops.length > 0 && (
+                <p><strong>Stops:</strong> {activeStops.join(" → ")}</p>
+              )}
               <p><strong>Dropoff:</strong> {dropoff}</p>
               <p><strong>Date & Time:</strong> {pickupDisplay}</p>
               <p><strong>Vehicle:</strong> {selectedVehicle.name}</p>
               <p><strong>Passengers:</strong> {passengers}</p>
               <p><strong>Luggage:</strong> {luggage}</p>
-              {activeStops.length > 0 && (
-                <p><strong>Stops:</strong> {activeStops.join(" → ")}</p>
-              )}
               {quote?.outbound && (
                 <p>
                   <strong>Outbound fare:</strong> £{quote.outbound.fare.toFixed(2)}
@@ -649,6 +663,9 @@ export default function WebBooker() {
               <h3 className="text-base font-semibold text-navy">Return Journey</h3>
               <div className="mt-3 space-y-1 text-sm text-gray-700">
                 <p><strong>Pickup:</strong> {returnPickup}</p>
+                {activeReturnStops.length > 0 && (
+                  <p><strong>Stops:</strong> {activeReturnStops.join(" → ")}</p>
+                )}
                 <p><strong>Dropoff:</strong> {returnDropoff}</p>
                 <p>
                   <strong>Date & Time:</strong>{" "}
@@ -656,9 +673,6 @@ export default function WebBooker() {
                 </p>
                 <p><strong>Passengers:</strong> {returnPassengers}</p>
                 <p><strong>Luggage:</strong> {returnLuggage}</p>
-                {activeReturnStops.length > 0 && (
-                  <p><strong>Stops:</strong> {activeReturnStops.join(" → ")}</p>
-                )}
                 {quote?.return_leg && (
                   <p>
                     <strong>Return fare:</strong> £{quote.return_leg.fare.toFixed(2)}
@@ -958,15 +972,6 @@ export default function WebBooker() {
               />
             </FieldRow>
 
-            <FieldRow icon={<FlagIcon />}>
-              <LocationAutocomplete
-                id="dropoff-location"
-                value={dropoff}
-                onChange={setDropoff}
-                placeholder="Enter Dropoff Airport, Location or Postcode"
-              />
-            </FieldRow>
-
             {stops.map((stop, index) => (
               <StopRow
                 key={index}
@@ -981,6 +986,15 @@ export default function WebBooker() {
                 onRemove={() => removeStop(index)}
               />
             ))}
+
+            <FieldRow icon={<FlagIcon />}>
+              <LocationAutocomplete
+                id="dropoff-location"
+                value={dropoff}
+                onChange={setDropoff}
+                placeholder="Enter Dropoff Airport, Location or Postcode"
+              />
+            </FieldRow>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <FieldRow icon={<CalendarIcon />}>
@@ -1148,15 +1162,6 @@ export default function WebBooker() {
                   />
                 </FieldRow>
 
-                <FieldRow icon={<FlagIcon />}>
-                  <LocationAutocomplete
-                    id="return-dropoff-location"
-                    value={returnDropoff}
-                    onChange={setReturnDropoff}
-                    placeholder="Enter Return Dropoff Airport, Location or Postcode"
-                  />
-                </FieldRow>
-
                 {returnStops.map((stop, index) => (
                   <StopRow
                     key={index}
@@ -1171,6 +1176,15 @@ export default function WebBooker() {
                     onRemove={() => removeReturnStop(index)}
                   />
                 ))}
+
+                <FieldRow icon={<FlagIcon />}>
+                  <LocationAutocomplete
+                    id="return-dropoff-location"
+                    value={returnDropoff}
+                    onChange={setReturnDropoff}
+                    placeholder="Enter Return Dropoff Airport, Location or Postcode"
+                  />
+                </FieldRow>
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <FieldRow icon={<CalendarIcon />}>

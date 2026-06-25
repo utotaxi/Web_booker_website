@@ -16,6 +16,7 @@ alter table public.later_bookings
 
 -- Personal details captured on the web booker checkout step.
 alter table public.later_bookings
+  add column if not exists name text,
   add column if not exists first_name text,
   add column if not exists last_name text,
   add column if not exists email text,
