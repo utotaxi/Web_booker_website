@@ -850,68 +850,6 @@ export default function WebBooker() {
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={personal.bookingForSomeoneElse}
-                  onChange={(e) =>
-                    setPersonal((prev) => ({
-                      ...prev,
-                      bookingForSomeoneElse: e.target.checked,
-                    }))
-                  }
-                  className="h-4 w-4 rounded border-gray-300"
-                />
-                Booking on behalf of someone else
-              </label>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Flight/Train Information
-                  </label>
-                  <input
-                    type="text"
-                    value={personal.flightInfo}
-                    onChange={(e) =>
-                      setPersonal((prev) => ({ ...prev, flightInfo: e.target.value }))
-                    }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2.5 text-sm focus:border-navy focus:outline-none"
-                    placeholder="Flight or train details"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Arrival From
-                  </label>
-                  <input
-                    type="text"
-                    value={personal.arrivalFrom}
-                    onChange={(e) =>
-                      setPersonal((prev) => ({ ...prev, arrivalFrom: e.target.value }))
-                    }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2.5 text-sm focus:border-navy focus:outline-none"
-                    placeholder="Where are you arriving from?"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">
-                  Additional Note
-                </label>
-                <textarea
-                  value={personal.additionalNote}
-                  onChange={(e) =>
-                    setPersonal((prev) => ({
-                      ...prev,
-                      additionalNote: e.target.value,
-                    }))
-                  }
-                  className="h-24 w-full rounded-md border border-gray-300 px-3 py-2.5 text-sm focus:border-navy focus:outline-none"
-                  placeholder="Any special requirements or notes"
-                />
-              </div>
             </div>
           </section>
         </div>
