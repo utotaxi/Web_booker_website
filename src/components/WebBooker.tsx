@@ -58,7 +58,6 @@ const TRUST_POINTS = [
   "+10,000 passenger transferred",
   "Instant confirmation",
   "All inclusive pricing",
-  "Secure payments by card",
 ];
 
 interface QuoteLegPreview {
