@@ -5,6 +5,7 @@ import {
   getSupabaseAdmin,
   getSupabaseTableColumns,
 } from "@/lib/supabase-admin";
+import { getStripe, isStripeConfigured } from "@/lib/stripe";
 import {
   resolveVehicleSelection,
   VEHICLE_BOOKING_LIMITS,
@@ -43,6 +44,7 @@ interface BookingPayload {
   flight_info?: string;
   arrival_from?: string;
   additional_note?: string;
+  payment_intent_id?: string;
 }
 
 function pickColumns(
@@ -202,6 +204,55 @@ export async function POST(req: NextRequest) {
       supabase
     );
 
+    // Payment gate: when Stripe is configured the ride can only be booked once
+    // the rider has paid. We verify the PaymentIntent server-side so the amount
+    // and paid status cannot be spoofed from the client.
+    let paymentInfo: {
+      payment_intent_id: string;
+      payment_status: string;
+      amount_paid: number;
+    } | null = null;
+
+    if (isStripeConfigured()) {
+      if (!payload.payment_intent_id?.trim()) {
+        return NextResponse.json(
+          { error: "Payment is required before booking. Please complete payment." },
+          { status: 402 }
+        );
+      }
+
+      const stripe = getStripe();
+      const intent = await stripe.paymentIntents.retrieve(
+        payload.payment_intent_id.trim()
+      );
+
+      if (intent.status !== "succeeded") {
+        return NextResponse.json(
+          { error: "Payment has not been completed. Please try paying again." },
+          { status: 402 }
+        );
+      }
+
+      const expectedPence = Math.round(quote.estimated_fare * 100);
+      const paidPence = intent.amount_received || intent.amount || 0;
+      // Allow a couple of pence of drift from rounding / live distance lookups.
+      if (Math.abs(paidPence - expectedPence) > 2) {
+        return NextResponse.json(
+          {
+            error:
+              "Paid amount does not match the current fare. Please refresh and try again.",
+          },
+          { status: 409 }
+        );
+      }
+
+      paymentInfo = {
+        payment_intent_id: intent.id,
+        payment_status: intent.status,
+        amount_paid: paidPence / 100,
+      };
+    }
+
     const travelMinutes = Math.max(
       1,
       quote.duration_minutes * (payload.return_journey ? 2 : 1)
@@ -272,6 +323,10 @@ export async function POST(req: NextRequest) {
           : null,
       customer_email: payload.email ?? null,
       customer_phone: payload.phone_number ?? null,
+      payment_intent_id: paymentInfo?.payment_intent_id ?? null,
+      payment_status: paymentInfo ? "paid" : null,
+      amount_paid: paymentInfo?.amount_paid ?? null,
+      payment_method: paymentInfo ? "stripe" : null,
     };
 
     const allowedColumns = await getSupabaseTableColumns(BOOKINGS_TABLE);

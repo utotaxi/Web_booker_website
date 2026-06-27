@@ -22,6 +22,7 @@ import {
   validatePickupDateTime,
 } from "@/lib/booking-validation";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
+import StripePaymentForm from "@/components/StripePaymentForm";
 import {
   MIN_BOOKING_HOURS,
   VEHICLE_OPTIONS,
@@ -77,7 +78,7 @@ interface BookingQuotePreview {
   return_leg?: QuoteLegPreview | null;
 }
 
-type BookerStep = "booking" | "review" | "personal" | "submitted";
+type BookerStep = "booking" | "review" | "personal" | "payment" | "submitted";
 
 interface PersonalDetails {
   firstName: string;
@@ -183,6 +184,12 @@ export default function WebBooker() {
   const [confirmedQuote, setConfirmedQuote] = useState<BookingQuotePreview | null>(
     null
   );
+  const [paymentClientSecret, setPaymentClientSecret] = useState<string | null>(
+    null
+  );
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState<number | null>(null);
+  const [preparingPayment, setPreparingPayment] = useState(false);
   const [personal, setPersonal] = useState<PersonalDetails>({
     firstName: "",
     lastName: "",
@@ -469,9 +476,36 @@ export default function WebBooker() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleConfirmBooking = async () => {
+  const buildBookingBody = (intentId?: string | null) => ({
+    pickup,
+    dropoff,
+    stops: activeStops,
+    pickup_date: date,
+    pickup_time: `${hour}:${minute}`,
+    pickup_datetime: toPickupISODateTime(date, hour, minute),
+    vehicle: selectedVehicle.name,
+    passengers,
+    luggage,
+    return_journey: showReturn,
+    return_pickup: showReturn ? returnPickup : undefined,
+    return_dropoff: showReturn ? returnDropoff : undefined,
+    return_stops: showReturn ? activeReturnStops : [],
+    return_passengers: showReturn ? returnPassengers : undefined,
+    return_luggage: showReturn ? returnLuggage : undefined,
+    return_date: showReturn ? returnDate : undefined,
+    return_time: showReturn ? `${returnHour}:${returnMinute}` : undefined,
+    return_datetime: showReturn
+      ? toPickupISODateTime(returnDate, returnHour, returnMinute)
+      : undefined,
+    first_name: personal.firstName,
+    last_name: personal.lastName,
+    email: personal.email,
+    phone_number: personal.phone,
+    payment_intent_id: intentId ?? undefined,
+  });
+
+  const submitBooking = async (intentId?: string | null) => {
     setSaveError(null);
-    if (!validatePersonalDetails()) return;
 
     if (!quote) {
       setSaveError("Fare is not ready yet. Please recalculate and try again.");
@@ -483,36 +517,7 @@ export default function WebBooker() {
       const response = await fetch("/api/bookings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pickup,
-          dropoff,
-          stops: activeStops,
-          pickup_date: date,
-          pickup_time: `${hour}:${minute}`,
-          pickup_datetime: toPickupISODateTime(date, hour, minute),
-          vehicle: selectedVehicle.name,
-          passengers,
-          luggage,
-          return_journey: showReturn,
-          return_pickup: showReturn ? returnPickup : undefined,
-          return_dropoff: showReturn ? returnDropoff : undefined,
-          return_stops: showReturn ? activeReturnStops : [],
-          return_passengers: showReturn ? returnPassengers : undefined,
-          return_luggage: showReturn ? returnLuggage : undefined,
-          return_date: showReturn ? returnDate : undefined,
-          return_time: showReturn ? `${returnHour}:${returnMinute}` : undefined,
-          return_datetime: showReturn
-            ? toPickupISODateTime(returnDate, returnHour, returnMinute)
-            : undefined,
-          first_name: personal.firstName,
-          last_name: personal.lastName,
-          email: personal.email,
-          phone_number: personal.phone,
-          booking_for_someone_else: personal.bookingForSomeoneElse,
-          flight_info: personal.flightInfo,
-          arrival_from: personal.arrivalFrom,
-          additional_note: personal.additionalNote,
-        }),
+        body: JSON.stringify(buildBookingBody(intentId)),
       });
 
       const data = await response.json();
@@ -531,6 +536,125 @@ export default function WebBooker() {
       setSaving(false);
     }
   };
+
+  // Validate the rider's details, then start payment. If Stripe is not
+  // configured on the server, the booking is created directly.
+  const handleProceedToPayment = async () => {
+    setSaveError(null);
+    if (!validatePersonalDetails()) return;
+
+    if (!quote) {
+      setSaveError("Fare is not ready yet. Please recalculate and try again.");
+      return;
+    }
+
+    setPreparingPayment(true);
+    try {
+      const response = await fetch("/api/payments/create-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pickup,
+          dropoff,
+          stops: activeStops,
+          vehicle: selectedVehicle.name,
+          passengers,
+          luggage,
+          return_journey: showReturn,
+          return_pickup: showReturn ? returnPickup : undefined,
+          return_dropoff: showReturn ? returnDropoff : undefined,
+          return_stops: showReturn ? activeReturnStops : [],
+          return_passengers: showReturn ? returnPassengers : undefined,
+          return_luggage: showReturn ? returnLuggage : undefined,
+          email: personal.email,
+          first_name: personal.firstName,
+          last_name: personal.lastName,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setSaveError(data.error || "Could not start payment. Please try again.");
+        return;
+      }
+
+      // Stripe not set up on the server: fall back to booking without payment.
+      if (data.configured === false) {
+        await submitBooking(null);
+        return;
+      }
+
+      if (!data.clientSecret) {
+        setSaveError("Could not start payment. Please try again.");
+        return;
+      }
+
+      setPaymentClientSecret(data.clientSecret as string);
+      setPaymentIntentId((data.paymentIntentId as string) ?? null);
+      setPaymentAmount((data.amount as number) ?? null);
+      setStep("payment");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch {
+      setSaveError("Network error while starting payment. Please try again.");
+    } finally {
+      setPreparingPayment(false);
+    }
+  };
+
+  if (step === "payment") {
+    const amountLabel = `£${((paymentAmount ?? Math.round((quote?.estimated_fare ?? 0) * 100)) / 100).toFixed(2)}`;
+    return (
+      <div className="mx-auto w-full max-w-2xl px-4 py-8">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+          <div className="flex items-center justify-between bg-navy px-6 py-4">
+            <h2 className="text-lg font-semibold text-white">Payment</h2>
+            <span className="text-sm font-semibold text-white">{amountLabel}</span>
+          </div>
+          <div className="space-y-5 p-6">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-navy">
+                  {selectedVehicle.name}
+                  {showReturn ? " · Return trip" : ""}
+                </span>
+                <span className="text-2xl font-bold text-navy">{amountLabel}</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                {pickup} → {dropoff}
+              </p>
+            </div>
+
+            <p className="text-sm text-gray-600">
+              Please complete payment to confirm your booking. Your card will be
+              charged {amountLabel}.
+            </p>
+
+            {paymentClientSecret && (
+              <StripePaymentForm
+                clientSecret={paymentClientSecret}
+                amountLabel={amountLabel}
+                processing={saving}
+                onPaid={() => submitBooking(paymentIntentId)}
+                onBack={() => {
+                  setStep("personal");
+                  setPaymentClientSecret(null);
+                  setPaymentIntentId(null);
+                  setPaymentAmount(null);
+                }}
+              />
+            )}
+
+            {saveError && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {saveError}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (step === "submitted") {
     return (
@@ -607,6 +731,9 @@ export default function WebBooker() {
                 setReturnPassengers(1);
                 setReturnLuggage(0);
                 setStops([]);
+                setPaymentClientSecret(null);
+                setPaymentIntentId(null);
+                setPaymentAmount(null);
               }}
               className="rounded-md bg-navy px-6 py-3 text-sm font-semibold uppercase tracking-wide text-white transition hover:bg-navy-dark"
             >
@@ -870,11 +997,11 @@ export default function WebBooker() {
           </button>
           <button
             type="button"
-            onClick={handleConfirmBooking}
-            disabled={saving}
+            onClick={handleProceedToPayment}
+            disabled={saving || preparingPayment}
             className="rounded-md bg-navy px-6 py-2.5 text-sm font-semibold uppercase tracking-wide text-white transition hover:bg-navy-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {saving ? "Saving…" : "Next"}
+            {preparingPayment || saving ? "Please wait…" : "Proceed to Payment"}
           </button>
         </div>
       </div>

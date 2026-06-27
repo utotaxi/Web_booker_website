@@ -48,6 +48,13 @@ alter table public.later_bookings
   add column if not exists luggage integer,
   add column if not exists status text default 'pending';
 
+-- Stripe payment tracking. Riders must pay before a booking is created.
+alter table public.later_bookings
+  add column if not exists payment_intent_id text,
+  add column if not exists payment_status text,
+  add column if not exists amount_paid numeric(10,2),
+  add column if not exists payment_method text;
+
 -- Return journey support. Each leg can have its own stops, passengers and
 -- luggage; per-leg distance/fare is stored alongside the trip totals.
 alter table public.later_bookings
