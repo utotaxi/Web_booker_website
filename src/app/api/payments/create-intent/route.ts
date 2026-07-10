@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calculateBookingQuote } from "@/lib/booking-quote";
+import { resolveCouponForFare } from "@/lib/coupons";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getStripe, isStripeConfigured } from "@/lib/stripe";
 import {
@@ -12,6 +13,8 @@ export const dynamic = "force-dynamic";
 
 const MAX_PASSENGERS = VEHICLE_BOOKING_LIMITS.minibus.maxPassengers;
 const MAX_LUGGAGE = VEHICLE_BOOKING_LIMITS.minibus.maxLuggage;
+/** Stripe rejects PaymentIntents below this for GBP. */
+const STRIPE_MIN_PENCE = 30;
 
 interface IntentPayload {
   pickup?: string;
@@ -29,6 +32,7 @@ interface IntentPayload {
   email?: string;
   first_name?: string;
   last_name?: string;
+  coupon_code?: string;
 }
 
 function normalizePassengers(value: number | undefined): number {
@@ -98,9 +102,31 @@ export async function POST(req: NextRequest) {
       supabase
     );
 
+    // Always re-check the coupon against Supabase — never trust client-side discount.
+    const appliedCoupon = await resolveCouponForFare(
+      supabase,
+      payload.coupon_code,
+      quote.estimated_fare
+    );
+    const chargeableFare = appliedCoupon?.final_fare ?? quote.estimated_fare;
+
     // Stripe charges in the smallest currency unit (pence for GBP).
-    const amountInPence = Math.round(quote.estimated_fare * 100);
-    if (!Number.isFinite(amountInPence) || amountInPence < 30) {
+    const amountInPence = Math.round(chargeableFare * 100);
+
+    // Fully discounted (or near-zero) fares skip card payment.
+    if (!Number.isFinite(amountInPence) || amountInPence < STRIPE_MIN_PENCE) {
+      if (appliedCoupon && amountInPence >= 0 && amountInPence < STRIPE_MIN_PENCE) {
+        return NextResponse.json({
+          configured: true,
+          paymentRequired: false,
+          amount: 0,
+          currency: "gbp",
+          fare: chargeableFare,
+          original_fare: quote.estimated_fare,
+          coupon: appliedCoupon,
+        });
+      }
+
       return NextResponse.json(
         { error: "Calculated fare is too low to charge. Please review the trip." },
         { status: 400 }
@@ -120,18 +146,26 @@ export async function POST(req: NextRequest) {
         dropoff: payload.dropoff.trim().slice(0, 480),
         vehicle: resolvedVehicle.displayName,
         round_trip: String(isRoundTrip),
-        fare_gbp: quote.estimated_fare.toFixed(2),
+        fare_gbp: chargeableFare.toFixed(2),
+        original_fare_gbp: quote.estimated_fare.toFixed(2),
+        coupon_code: appliedCoupon?.code?.slice(0, 100) ?? "",
+        coupon_discount_percent: appliedCoupon
+          ? String(appliedCoupon.discount_percent)
+          : "",
         customer_name: customerName.slice(0, 480),
       },
     });
 
     return NextResponse.json({
       configured: true,
+      paymentRequired: true,
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       amount: amountInPence,
       currency: "gbp",
-      fare: quote.estimated_fare,
+      fare: chargeableFare,
+      original_fare: quote.estimated_fare,
+      coupon: appliedCoupon,
     });
   } catch (error) {
     const message = (error as Error).message || "Failed to start payment.";

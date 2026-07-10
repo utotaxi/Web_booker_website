@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calculateBookingQuote } from "@/lib/booking-quote";
 import {
+  incrementCouponRedemption,
+  resolveCouponForFare,
+  type AppliedCoupon,
+} from "@/lib/coupons";
+import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
   getSupabaseTableColumns,
@@ -45,6 +50,7 @@ interface BookingPayload {
   arrival_from?: string;
   additional_note?: string;
   payment_intent_id?: string;
+  coupon_code?: string;
 }
 
 function pickColumns(
@@ -204,16 +210,45 @@ export async function POST(req: NextRequest) {
       supabase
     );
 
+    // Always re-validate the coupon against the live Supabase coupons table.
+    let appliedCoupon: AppliedCoupon | null = null;
+    try {
+      appliedCoupon = await resolveCouponForFare(
+        supabase,
+        payload.coupon_code,
+        quote.estimated_fare
+      );
+    } catch (couponError) {
+      return NextResponse.json(
+        { error: (couponError as Error).message || "Invalid coupon code." },
+        { status: 400 }
+      );
+    }
+
+    const chargeableFare = appliedCoupon?.final_fare ?? quote.estimated_fare;
+    const discountedQuote = {
+      ...quote,
+      estimated_fare: chargeableFare,
+      pricing_breakdown: {
+        ...quote.pricing_breakdown,
+        final_fare: chargeableFare,
+        original_fare: quote.estimated_fare,
+        coupon: appliedCoupon,
+      },
+    };
+
     // Payment gate: when Stripe is configured the ride can only be booked once
-    // the rider has paid. We verify the PaymentIntent server-side so the amount
-    // and paid status cannot be spoofed from the client.
+    // the rider has paid (unless a coupon reduces the fare below Stripe's minimum).
     let paymentInfo: {
       payment_intent_id: string;
       payment_status: string;
       amount_paid: number;
     } | null = null;
 
-    if (isStripeConfigured()) {
+    const expectedPence = Math.round(chargeableFare * 100);
+    const couponCoversFullFare = Boolean(appliedCoupon) && expectedPence < 30;
+
+    if (isStripeConfigured() && !couponCoversFullFare) {
       if (!payload.payment_intent_id?.trim()) {
         return NextResponse.json(
           { error: "Payment is required before booking. Please complete payment." },
@@ -233,7 +268,6 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const expectedPence = Math.round(quote.estimated_fare * 100);
       const paidPence = intent.amount_received || intent.amount || 0;
       // Allow a couple of pence of drift from rounding / live distance lookups.
       if (Math.abs(paidPence - expectedPence) > 2) {
@@ -250,6 +284,12 @@ export async function POST(req: NextRequest) {
         payment_intent_id: intent.id,
         payment_status: intent.status,
         amount_paid: paidPence / 100,
+      };
+    } else if (couponCoversFullFare) {
+      paymentInfo = {
+        payment_intent_id: "coupon",
+        payment_status: "succeeded",
+        amount_paid: 0,
       };
     }
 
@@ -289,8 +329,14 @@ export async function POST(req: NextRequest) {
       return_distance_miles: quote.return_leg?.distance_miles ?? null,
       return_duration_minutes: quote.return_leg?.duration_minutes ?? null,
       return_fare: quote.return_leg?.fare ?? null,
-      estimated_fare: quote.estimated_fare,
-      fare: quote.estimated_fare,
+      estimated_fare: chargeableFare,
+      fare: chargeableFare,
+      original_fare: quote.estimated_fare,
+      coupon_id: appliedCoupon?.id ?? null,
+      coupon_code: appliedCoupon?.code ?? null,
+      coupon_name: appliedCoupon?.name ?? null,
+      coupon_discount_percent: appliedCoupon?.discount_percent ?? null,
+      coupon_discount_amount: appliedCoupon?.discount_amount ?? null,
       distance_miles: quote.distance_miles,
       duration_minutes: quote.duration_minutes,
       pickup_latitude: quote.pickup_latitude,
@@ -299,7 +345,7 @@ export async function POST(req: NextRequest) {
       dropoff_longitude: quote.dropoff_longitude,
       pricing_rule_id: quote.pricing_rule_id,
       pricing_rule_name: quote.pricing_rule_name,
-      pricing_breakdown: quote.pricing_breakdown,
+      pricing_breakdown: discountedQuote.pricing_breakdown,
       quote_source: quote.distance_source,
       quote_currency: quote.currency,
       name:
@@ -324,9 +370,17 @@ export async function POST(req: NextRequest) {
       customer_email: payload.email ?? null,
       customer_phone: payload.phone_number ?? null,
       payment_intent_id: paymentInfo?.payment_intent_id ?? null,
-      payment_status: paymentInfo ? "paid" : null,
+      payment_status: paymentInfo
+        ? couponCoversFullFare
+          ? "coupon"
+          : "paid"
+        : null,
       amount_paid: paymentInfo?.amount_paid ?? null,
-      payment_method: paymentInfo ? "stripe" : null,
+      payment_method: paymentInfo
+        ? couponCoversFullFare
+          ? "coupon"
+          : "stripe"
+        : null,
     };
 
     const allowedColumns = await getSupabaseTableColumns(BOOKINGS_TABLE);
@@ -362,7 +416,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({ booking: data, quote }, { status: 201 });
+    if (appliedCoupon?.id) {
+      await incrementCouponRedemption(supabase, appliedCoupon.id);
+    }
+
+    return NextResponse.json(
+      { booking: data, quote: discountedQuote, coupon: appliedCoupon },
+      { status: 201 }
+    );
   } catch (err) {
     return NextResponse.json(
       { error: (err as Error).message || "Failed to store booking." },

@@ -78,6 +78,16 @@ interface BookingQuotePreview {
   return_leg?: QuoteLegPreview | null;
 }
 
+interface AppliedCouponPreview {
+  id: string;
+  code: string;
+  name: string | null;
+  discount_percent: number;
+  discount_amount: number;
+  original_fare: number;
+  final_fare: number;
+}
+
 type BookerStep = "booking" | "review" | "personal" | "payment" | "submitted";
 
 interface PersonalDetails {
@@ -201,9 +211,19 @@ export default function WebBooker() {
     additionalNote: "",
   });
   const [personalErrors, setPersonalErrors] = useState<Record<string, string>>({});
+  const [couponInput, setCouponInput] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCouponPreview | null>(
+    null
+  );
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponLoading, setCouponLoading] = useState(false);
 
   const selectedVehicle = VEHICLE_OPTIONS.find((v) => v.id === vehicle)!;
   const pickupDisplay = formatPickupDisplay(date, hour, minute);
+  const displayFare =
+    appliedCoupon?.final_fare ?? quote?.estimated_fare ?? 0;
+  const originalFare =
+    appliedCoupon?.original_fare ?? quote?.estimated_fare ?? 0;
 
   // The single selected vehicle must fit the busiest leg, so compatibility is
   // based on the maximum passenger/luggage count across outbound and return.
@@ -342,14 +362,19 @@ export default function WebBooker() {
         if (!response.ok) {
           setQuote(null);
           setQuoteError(data.error || "Could not calculate fare.");
+          setAppliedCoupon(null);
           return;
         }
 
         setQuote((data.quote ?? null) as BookingQuotePreview | null);
+        // Fare changed — force the rider to re-apply any coupon against the new total.
+        setAppliedCoupon(null);
+        setCouponError(null);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           setQuote(null);
           setQuoteError("Could not calculate fare right now.");
+          setAppliedCoupon(null);
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -476,6 +501,55 @@ export default function WebBooker() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const applyCoupon = async () => {
+    setCouponError(null);
+
+    if (!quote) {
+      setCouponError("Please wait for the fare before applying a coupon.");
+      return;
+    }
+
+    const code = couponInput.trim();
+    if (!code) {
+      setCouponError("Please enter a coupon code.");
+      return;
+    }
+
+    setCouponLoading(true);
+    try {
+      const response = await fetch("/api/coupons/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          fare: quote.estimated_fare,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.valid || !data.coupon) {
+        setAppliedCoupon(null);
+        setCouponError(data.error || "This coupon code is not valid.");
+        return;
+      }
+
+      setAppliedCoupon(data.coupon as AppliedCouponPreview);
+      setCouponInput((data.coupon as AppliedCouponPreview).code);
+      setCouponError(null);
+    } catch {
+      setAppliedCoupon(null);
+      setCouponError("Could not verify coupon right now. Please try again.");
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const clearCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponInput("");
+    setCouponError(null);
+  };
+
   const buildBookingBody = (intentId?: string | null) => ({
     pickup,
     dropoff,
@@ -502,6 +576,7 @@ export default function WebBooker() {
     email: personal.email,
     phone_number: personal.phone,
     payment_intent_id: intentId ?? undefined,
+    coupon_code: appliedCoupon?.code ?? undefined,
   });
 
   const submitBooking = async (intentId?: string | null) => {
@@ -528,6 +603,9 @@ export default function WebBooker() {
       }
 
       setConfirmedQuote((data.quote ?? quote) as BookingQuotePreview | null);
+      if (data.coupon) {
+        setAppliedCoupon(data.coupon as AppliedCouponPreview);
+      }
       setStep("submitted");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch {
@@ -569,6 +647,7 @@ export default function WebBooker() {
           email: personal.email,
           first_name: personal.firstName,
           last_name: personal.lastName,
+          coupon_code: appliedCoupon?.code ?? undefined,
         }),
       });
 
@@ -585,9 +664,22 @@ export default function WebBooker() {
         return;
       }
 
+      // Coupon covers the full fare (or leaves less than Stripe's minimum).
+      if (data.paymentRequired === false) {
+        if (data.coupon) {
+          setAppliedCoupon(data.coupon as AppliedCouponPreview);
+        }
+        await submitBooking(null);
+        return;
+      }
+
       if (!data.clientSecret) {
         setSaveError("Could not start payment. Please try again.");
         return;
+      }
+
+      if (data.coupon) {
+        setAppliedCoupon(data.coupon as AppliedCouponPreview);
       }
 
       setPaymentClientSecret(data.clientSecret as string);
@@ -603,7 +695,7 @@ export default function WebBooker() {
   };
 
   if (step === "payment") {
-    const amountLabel = `£${((paymentAmount ?? Math.round((quote?.estimated_fare ?? 0) * 100)) / 100).toFixed(2)}`;
+    const amountLabel = `£${((paymentAmount ?? Math.round(displayFare * 100)) / 100).toFixed(2)}`;
     return (
       <div className="mx-auto w-full max-w-2xl px-4 py-8">
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
@@ -620,6 +712,15 @@ export default function WebBooker() {
                 </span>
                 <span className="text-2xl font-bold text-navy">{amountLabel}</span>
               </div>
+              {appliedCoupon && (
+                <p className="mt-1 text-xs text-emerald-700">
+                  Coupon {appliedCoupon.code} applied (−{appliedCoupon.discount_percent}%
+                  {appliedCoupon.original_fare > displayFare
+                    ? ` · was £${appliedCoupon.original_fare.toFixed(2)}`
+                    : ""}
+                  )
+                </p>
+              )}
               <p className="mt-1 text-xs text-gray-500">
                 {pickup} → {dropoff}
               </p>
@@ -709,7 +810,18 @@ export default function WebBooker() {
               )}
               {confirmedQuote && (
                 <>
-                  <p className="pt-1"><strong>Estimated Fare:</strong> £{confirmedQuote.estimated_fare.toFixed(2)}{confirmedQuote.return_leg ? " (return trip)" : ""}</p>
+                  <p className="pt-1">
+                    <strong>Estimated Fare:</strong>{" "}
+                    £{(appliedCoupon?.final_fare ?? confirmedQuote.estimated_fare).toFixed(2)}
+                    {confirmedQuote.return_leg ? " (return trip)" : ""}
+                  </p>
+                  {appliedCoupon && (
+                    <p>
+                      <strong>Coupon:</strong> {appliedCoupon.code} (−
+                      {appliedCoupon.discount_percent}% · saved £
+                      {appliedCoupon.discount_amount.toFixed(2)})
+                    </p>
+                  )}
                   <p>
                     <strong>Total distance:</strong> {confirmedQuote.distance_miles.toFixed(2)} miles
                     {" · "}
@@ -734,6 +846,9 @@ export default function WebBooker() {
                 setPaymentClientSecret(null);
                 setPaymentIntentId(null);
                 setPaymentAmount(null);
+                setCouponInput("");
+                setAppliedCoupon(null);
+                setCouponError(null);
               }}
               className="rounded-md bg-navy px-6 py-3 text-sm font-semibold uppercase tracking-wide text-white transition hover:bg-navy-dark"
             >
@@ -754,12 +869,71 @@ export default function WebBooker() {
               Estimated Fare
             </p>
             <p className="mt-1 text-3xl font-bold text-emerald-800">
-              £{(quote?.estimated_fare ?? 0).toFixed(2)}
+              £{displayFare.toFixed(2)}
             </p>
+            {appliedCoupon && (
+              <p className="mt-1 text-sm text-emerald-700">
+                <span className="line-through text-emerald-600/70">
+                  £{originalFare.toFixed(2)}
+                </span>
+                {" · "}
+                Coupon {appliedCoupon.code} (−{appliedCoupon.discount_percent}%)
+              </p>
+            )}
             <p className="mt-1 text-sm text-emerald-700">
               {(quote?.distance_miles ?? 0).toFixed(2)} miles · {quote?.duration_minutes ?? 0} mins
               {showReturn ? " · Return trip included" : ""}
             </p>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <label
+              htmlFor="coupon-code"
+              className="mb-2 block text-sm font-semibold text-navy"
+            >
+              Discount coupon
+            </label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                id="coupon-code"
+                type="text"
+                value={couponInput}
+                onChange={(e) => {
+                  setCouponInput(e.target.value);
+                  setCouponError(null);
+                }}
+                disabled={!!appliedCoupon || couponLoading}
+                placeholder="Enter coupon code"
+                className="w-full flex-1 rounded-md border border-gray-300 px-3 py-2.5 text-sm uppercase focus:border-navy focus:outline-none disabled:bg-gray-50"
+                autoComplete="off"
+              />
+              {appliedCoupon ? (
+                <button
+                  type="button"
+                  onClick={clearCoupon}
+                  className="rounded-md border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                >
+                  Remove
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={applyCoupon}
+                  disabled={couponLoading || !couponInput.trim()}
+                  className="rounded-md bg-navy px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-navy-dark disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {couponLoading ? "Checking…" : "Apply"}
+                </button>
+              )}
+            </div>
+            {appliedCoupon && (
+              <p className="mt-2 text-sm text-emerald-700">
+                Coupon applied — you save £{appliedCoupon.discount_amount.toFixed(2)}.
+              </p>
+            )}
+            {couponError && (
+              <p className="mt-2 text-sm text-red-600">{couponError}</p>
+            )}
           </div>
 
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
@@ -894,8 +1068,17 @@ export default function WebBooker() {
                 <div className="text-right">
                   <p className="text-xs font-semibold uppercase text-gray-500">Total Price</p>
                   <p className="text-3xl font-bold text-navy">
-                    £{(quote?.estimated_fare ?? 0).toFixed(2)}
+                    £{displayFare.toFixed(2)}
                   </p>
+                  {appliedCoupon && (
+                    <p className="mt-1 text-xs text-emerald-700">
+                      <span className="line-through text-gray-400">
+                        £{originalFare.toFixed(2)}
+                      </span>
+                      {" · "}
+                      {appliedCoupon.code} (−{appliedCoupon.discount_percent}%)
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
