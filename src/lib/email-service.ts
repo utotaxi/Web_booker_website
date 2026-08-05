@@ -151,8 +151,8 @@ async function resolveSmtpIp(host: string): Promise<string> {
  * connect to that IP, and set servername for proper TLS SNI so Gmail's
  * certificate still validates against "smtp.gmail.com".
  */
-export async function getEmailTransporter(forceRefresh = false): Promise<nodemailer.Transporter> {
-  if (cachedTransporter && !forceRefresh && cachedResolvedIp) return cachedTransporter;
+export async function getEmailTransporter(forceRefresh = false, portOverride?: number): Promise<nodemailer.Transporter> {
+  if (cachedTransporter && !forceRefresh && cachedResolvedIp && !portOverride) return cachedTransporter;
 
   const config = getSmtpConfig();
 
@@ -167,12 +167,14 @@ export async function getEmailTransporter(forceRefresh = false): Promise<nodemai
   cachedResolvedIp = resolvedIp;
 
   const isGmail = config.host === "smtp.gmail.com" || config.host.includes("gmail");
+  const effectivePort = portOverride ?? config.port;
+  const effectiveSecure = effectivePort === 465; // SSL on 465, STARTTLS on 587
 
   cachedTransporter = nodemailer.createTransport({
     host: resolvedIp, // Use resolved IP to bypass broken container DNS
-    port: config.port,
-    secure: config.secure, // false for 587 (STARTTLS)
-    requireTLS: true,
+    port: effectivePort,
+    secure: effectiveSecure,
+    requireTLS: effectivePort !== 465, // only for STARTTLS (587), not direct SSL (465)
     auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
     tls: {
       // SNI with the real hostname so Gmail's TLS cert matches
@@ -705,6 +707,10 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   }
 
   // 2. SMTP / Nodemailer dispatch via Gmail
+  // Try port 587 (STARTTLS) first, fall back to port 465 (SSL).
+  // Railway blocks outbound SMTP ports — see Resend option above for Railway deployments.
+  const portsToTry = config.port === 587 ? [587, 465] : [config.port, 587, 465];
+
   const mailOptions: nodemailer.SendMailOptions = {
     from: `"${config.fromName}" <${config.fromEmail}>`,
     to: targetEmail,
@@ -714,30 +720,43 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
     html,
   };
 
-  try {
-    const transporter = await getEmailTransporter();
-    console.log(`[SMTP Sending] Connecting to ${config.host}:${config.port}...`);
-    const info = await transporter.sendMail(mailOptions);
+  let lastError: Error & { code?: string; command?: string; responseCode?: number; response?: string } | null = null;
 
-    console.log(`[SMTP Success] Email sent successfully (${options.type}) to ${targetEmail}. Message ID: ${info.messageId}`);
-    console.log(`[SMTP Success] Server response: ${info.response}`);
-    return {
-      success: true,
-      messageId: info.messageId,
-      details: { provider: "smtp", response: info.response, envelope: info.envelope },
-    };
-  } catch (error) {
-    // Invalidate cached transporter on error so next attempt creates a fresh connection
-    cachedTransporter = null;
-    cachedResolvedIp = null;
-    const err = error as Error & { code?: string; command?: string; responseCode?: number; response?: string };
+  for (const tryPort of portsToTry) {
+    try {
+      // Force-fresh transporter per port attempt
+      cachedTransporter = null;
+      cachedResolvedIp = null;
+      const transporter = await getEmailTransporter(true, tryPort);
+      console.log(`[SMTP Sending] Trying ${config.host}:${tryPort}...`);
+      const info = await transporter.sendMail(mailOptions);
 
+      console.log(`[SMTP Success] Email sent successfully (${options.type}) to ${targetEmail}. Message ID: ${info.messageId}`);
+      console.log(`[SMTP Success] Server response: ${info.response}`);
+      return {
+        success: true,
+        messageId: info.messageId,
+        details: { provider: "smtp", port: tryPort, response: info.response, envelope: info.envelope },
+      };
+    } catch (error) {
+      cachedTransporter = null;
+      cachedResolvedIp = null;
+      const err = error as Error & { code?: string; command?: string; responseCode?: number; response?: string };
+      console.warn(`[SMTP Port ${tryPort}] Failed: ${err.message} (Code: ${err.code || "N/A"})`);
+      lastError = err;
+      // Continue to next port
+    }
+  }
+
+  // All ports failed — build detailed error
+  {
+    const err = lastError!;
     const logDetails = {
       type: options.type,
       recipient: targetEmail,
       subject,
       host: config.host,
-      port: config.port,
+      portsTried: portsToTry,
       user: config.user,
       errorCode: err.code || "UNKNOWN",
       errorMessage: err.message,
@@ -746,21 +765,20 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
       smtpResponse: err.response || "N/A",
     };
 
-    console.error(`[SMTP Error] Failed to send ${options.type} email to ${targetEmail}`, logDetails);
+    console.error(`[SMTP Error] All ports failed to send ${options.type} email to ${targetEmail}`, logDetails);
 
-    // Provide actionable error messages for common Gmail SMTP issues
     let actionableHint = "";
     if (err.code === "EAUTH" || err.message?.includes("Invalid login") || err.message?.includes("535")) {
       actionableHint = " Gmail authentication failed. Verify your App Password is correct and 2FA is enabled. Generate a new App Password at https://myaccount.google.com/apppasswords";
     } else if (err.code === "ESOCKET" || err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
-      actionableHint = ` Cannot reach ${config.host}:${config.port}. Check network/firewall allows outbound SMTP (port 587).`;
-    } else if (err.code === "ECONNRESET" || err.message?.includes("timeout")) {
-      actionableHint = " Connection was reset or timed out. The SMTP server may be unreachable from this environment.";
+      actionableHint = ` Cannot reach SMTP server on any port. Check network/firewall allows outbound SMTP.`;
+    } else if (err.code === "ECONNRESET" || err.code === "ETIMEDOUT" || err.message?.includes("timeout")) {
+      actionableHint = " All SMTP ports blocked or timed out. This is expected on Railway/Vercel — use the Resend HTTP API instead. Set RESEND_API_KEY in your environment variables.";
     } else if (err.message?.includes("certificate") || err.message?.includes("TLS")) {
       actionableHint = " TLS/certificate error. The SMTP server's certificate could not be verified.";
     }
 
-    const fullError = `Failed to send email: ${err.message}${actionableHint}`;
+    const fullError = `Failed to send email via all SMTP ports (${portsToTry.join(",")}): ${err.message}${actionableHint}`;
 
     return {
       success: false,
