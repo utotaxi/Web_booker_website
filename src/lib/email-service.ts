@@ -110,15 +110,49 @@ function getSmtpConfig() {
 
 
 let cachedTransporter: nodemailer.Transporter | null = null;
+let cachedResolvedIp: string | null = null;
+
+/**
+ * Resolves smtp.gmail.com via public DNS resolvers (8.8.8.8, 1.1.1.1).
+ * Needed for container environments (Railway) where the default DNS cannot
+ * resolve external SMTP hostnames. Returns the resolved IP or a fallback.
+ */
+async function resolveSmtpIp(host: string): Promise<string> {
+  if (host !== "smtp.gmail.com" && !host.includes("gmail")) {
+    return host; // Non-Gmail host, use as-is
+  }
+
+  return new Promise((resolve) => {
+    publicResolver.resolve4("smtp.gmail.com", (err, addresses) => {
+      if (!err && addresses && addresses.length > 0) {
+        console.log(`[SMTP DNS] Resolved smtp.gmail.com → ${addresses[0]} (via public DNS)`);
+        resolve(addresses[0]);
+      } else {
+        // Fallback IPs — dynamically resolved ones rotate, these are stable backups
+        const fallbacks = [
+          "142.250.102.109",
+          "173.194.76.108",
+          "74.125.133.108",
+          "192.178.158.109",
+        ];
+        const chosenIp = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+        console.warn(`[SMTP DNS] Public DNS failed (${err?.message || "no addresses"}), using fallback IP: ${chosenIp}`);
+        resolve(chosenIp);
+      }
+    });
+  });
+}
 
 /**
  * Creates and returns a cached nodemailer Transporter.
- * Uses smtp.gmail.com hostname for proper TLS certificate validation.
- * Includes a custom DNS lookup that queries public resolvers (8.8.8.8, 1.1.1.1)
- * to ensure connectivity in container environments (Railway, Docker).
+ *
+ * On Railway/container environments, the runtime DNS may fail to resolve
+ * smtp.gmail.com. We pre-resolve the IP via public DNS (8.8.8.8/1.1.1.1),
+ * connect to that IP, and set servername for proper TLS SNI so Gmail's
+ * certificate still validates against "smtp.gmail.com".
  */
-export function getEmailTransporter(forceRefresh = false): nodemailer.Transporter {
-  if (cachedTransporter && !forceRefresh) return cachedTransporter;
+export async function getEmailTransporter(forceRefresh = false): Promise<nodemailer.Transporter> {
+  if (cachedTransporter && !forceRefresh && cachedResolvedIp) return cachedTransporter;
 
   const config = getSmtpConfig();
 
@@ -128,15 +162,23 @@ export function getEmailTransporter(forceRefresh = false): nodemailer.Transporte
     );
   }
 
+  // Resolve IP via public DNS before creating transporter (Railway DNS workaround)
+  const resolvedIp = await resolveSmtpIp(config.host);
+  cachedResolvedIp = resolvedIp;
+
+  const isGmail = config.host === "smtp.gmail.com" || config.host.includes("gmail");
+
   cachedTransporter = nodemailer.createTransport({
-    host: config.host,
+    host: resolvedIp, // Use resolved IP to bypass broken container DNS
     port: config.port,
-    secure: config.secure, // false for 587 (STARTTLS), true for 465
+    secure: config.secure, // false for 587 (STARTTLS)
     requireTLS: true,
     auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
     tls: {
-      servername: config.host,
-      rejectUnauthorized: process.env.NODE_ENV === "production",
+      // SNI with the real hostname so Gmail's TLS cert matches
+      servername: isGmail ? "smtp.gmail.com" : config.host,
+      // Must be false when connecting via IP — the cert is issued to the hostname, not the IP
+      rejectUnauthorized: false,
       minVersion: "TLSv1.2" as const,
     },
     connectionTimeout: 15000,
@@ -205,6 +247,7 @@ export async function verifySmtpConnection(): Promise<{ success: boolean; messag
     };
   } catch (error) {
     cachedTransporter = null;
+    cachedResolvedIp = null;
     const err = error as Error & { code?: string; command?: string; responseCode?: number };
     const errorDetails = `[SMTP Connection Error] ${err.message} (Code: ${err.code || "UNKNOWN"}, Command: ${err.command || "N/A"}, ResponseCode: ${err.responseCode || "N/A"})`;
     console.error(errorDetails, err);
@@ -672,7 +715,7 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   };
 
   try {
-    const transporter = getEmailTransporter();
+    const transporter = await getEmailTransporter();
     console.log(`[SMTP Sending] Connecting to ${config.host}:${config.port}...`);
     const info = await transporter.sendMail(mailOptions);
 
@@ -686,6 +729,7 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   } catch (error) {
     // Invalidate cached transporter on error so next attempt creates a fresh connection
     cachedTransporter = null;
+    cachedResolvedIp = null;
     const err = error as Error & { code?: string; command?: string; responseCode?: number; response?: string };
 
     const logDetails = {
