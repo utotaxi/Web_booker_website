@@ -423,6 +423,13 @@ export async function POST(req: NextRequest) {
     }
 
     const recipientEmail = payload.email || data.email || data.customer_email;
+    console.log("[Booking Route] Email dispatch check:", {
+      payloadEmail: payload.email,
+      dataEmail: data.email,
+      dataCustomerEmail: data.customer_email,
+      resolvedRecipient: recipientEmail,
+    });
+
     if (recipientEmail) {
       const passengerName =
         payload.first_name || payload.last_name
@@ -447,9 +454,11 @@ export async function POST(req: NextRequest) {
           : "Credit Card (Stripe)"
         : "Pay in Vehicle";
 
+      console.log("[Booking Route] Sending booking confirmation email to:", recipientEmail);
+
       // Await email dispatch inside try/catch so serverless container waits for SMTP completion without failing response if SMTP has an error
       try {
-        await sendBookingEmail({
+        const emailResult = await sendBookingEmail({
           to: recipientEmail,
           type: "booking_confirmation",
           data: {
@@ -467,10 +476,14 @@ export async function POST(req: NextRequest) {
             notes: payload.additional_note ?? undefined,
           },
         });
+        console.log("[Booking Route] Email result:", emailResult);
       } catch (emailErr) {
         console.error("[Booking Route] Failed to send confirmation email:", emailErr);
       }
+    } else {
+      console.warn("[Booking Route] No recipient email found, skipping email dispatch.");
     }
+
 
 
     return NextResponse.json(
