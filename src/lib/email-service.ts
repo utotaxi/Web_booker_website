@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import dns, { Resolver } from "dns";
 
 try {
@@ -152,6 +153,13 @@ export function getEmailTransporter(forceRefresh = false): nodemailer.Transporte
  * Verifies SMTP connection configuration and returns status.
  */
 export async function verifySmtpConnection(): Promise<{ success: boolean; message: string }> {
+  if (process.env.RESEND_API_KEY?.trim()) {
+    return {
+      success: true,
+      message: "Resend HTTP API key is configured. Email dispatch active via Resend.",
+    };
+  }
+
   try {
     const config = getSmtpConfig();
     if (!config.pass) {
@@ -171,6 +179,7 @@ export async function verifySmtpConnection(): Promise<{ success: boolean; messag
     return { success: false, message: errorDetails };
   }
 }
+
 
 
 /**
@@ -558,19 +567,53 @@ UTO Customer Support`;
 
 /**
  * Sends automated booking email with full error handling and logging.
+ * Prefers Resend HTTP API if RESEND_API_KEY is present (recommended on Railway),
+ * falling back to Nodemailer SMTP.
  */
 export async function sendBookingEmail(options: SendEmailOptions): Promise<SendEmailResult> {
   const config = getSmtpConfig();
   const targetEmail = options.to?.trim() || options.data?.passengerEmail?.trim();
 
   if (!targetEmail) {
-    const errorMsg = "[SMTP Error] Recipient email is missing or empty.";
+    const errorMsg = "[Email Error] Recipient email is missing or empty.";
     console.error(errorMsg, { options });
     return { success: false, error: errorMsg };
   }
 
   const { subject, html, text } = buildEmailContent(options.type, options.data);
 
+  // 1. HTTP API dispatch via Resend (Bypasses cloud firewall SMTP port blocks on Railway/Vercel)
+  const resendApiKey = process.env.RESEND_API_KEY?.trim();
+  if (resendApiKey) {
+    try {
+      const resend = new Resend(resendApiKey);
+      const fromAddress = process.env.RESEND_FROM_EMAIL?.trim() || `"${config.fromName}" <onboarding@resend.dev>`;
+      const resendResult = await resend.emails.send({
+        from: fromAddress,
+        to: targetEmail,
+        replyTo: config.replyTo,
+        subject,
+        html,
+        text,
+      });
+
+      if (resendResult.error) {
+        console.error("[Resend Error]", resendResult.error);
+        throw new Error(resendResult.error.message);
+      }
+
+      console.log(`[Resend Success] Email sent successfully (${options.type}) to ${targetEmail}. ID: ${resendResult.data?.id}`);
+      return {
+        success: true,
+        messageId: resendResult.data?.id,
+        details: { provider: "resend", data: resendResult.data },
+      };
+    } catch (resendErr) {
+      console.warn("[Resend Fallback] Resend HTTP API failed, falling back to Nodemailer SMTP:", (resendErr as Error).message);
+    }
+  }
+
+  // 2. SMTP / Nodemailer dispatch
   const mailOptions: nodemailer.SendMailOptions = {
     from: `"${config.fromName}" <${config.fromEmail}>`,
     to: targetEmail,
@@ -613,3 +656,4 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
     };
   }
 }
+
