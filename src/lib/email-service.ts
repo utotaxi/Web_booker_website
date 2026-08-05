@@ -1,4 +1,11 @@
 import nodemailer from "nodemailer";
+import dns from "dns";
+
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  // Safe fallback for Node runtimes
+}
 
 export type EmailType =
   | "booking_confirmation"
@@ -60,7 +67,6 @@ function getSmtpConfig() {
   return { host, port, secure, user, pass, fromEmail, fromName, replyTo };
 }
 
-
 let cachedTransporter: nodemailer.Transporter | null = null;
 
 /**
@@ -89,6 +95,7 @@ export function getEmailTransporter(): nodemailer.Transporter {
 
   return cachedTransporter;
 }
+
 
 
 /**
