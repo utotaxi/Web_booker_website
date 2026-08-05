@@ -237,7 +237,7 @@ export async function verifySmtpConnection(): Promise<{ success: boolean; messag
   }
 
   try {
-    const transporter = getEmailTransporter(true);
+    const transporter = await getEmailTransporter(true);
     await transporter.verify();
     console.log(`[SMTP Verify] Connection verified successfully. Resolved IP: ${dnsCheck.resolvedIp}`);
     return {
