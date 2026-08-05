@@ -15,6 +15,8 @@ import {
   resolveVehicleSelection,
   VEHICLE_BOOKING_LIMITS,
 } from "@/lib/vehicle-compatibility";
+import { sendBookingEmail } from "@/lib/email-service";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,8 +124,8 @@ export async function POST(req: NextRequest) {
     payload.pickup_datetime && !Number.isNaN(Date.parse(payload.pickup_datetime))
       ? new Date(payload.pickup_datetime).toISOString()
       : payload.pickup_date &&
-          payload.pickup_time &&
-          !Number.isNaN(Date.parse(`${payload.pickup_date}T${payload.pickup_time}:00`))
+        payload.pickup_time &&
+        !Number.isNaN(Date.parse(`${payload.pickup_date}T${payload.pickup_time}:00`))
         ? new Date(`${payload.pickup_date}T${payload.pickup_time}:00`).toISOString()
         : null;
 
@@ -161,14 +163,14 @@ export async function POST(req: NextRequest) {
 
   const returnAtIso =
     isRoundTrip && payload.return_datetime &&
-    !Number.isNaN(Date.parse(payload.return_datetime))
+      !Number.isNaN(Date.parse(payload.return_datetime))
       ? new Date(payload.return_datetime).toISOString()
       : isRoundTrip &&
-          payload.return_date &&
-          payload.return_time &&
-          !Number.isNaN(
-            Date.parse(`${payload.return_date}T${payload.return_time}:00`)
-          )
+        payload.return_date &&
+        payload.return_time &&
+        !Number.isNaN(
+          Date.parse(`${payload.return_date}T${payload.return_time}:00`)
+        )
         ? new Date(`${payload.return_date}T${payload.return_time}:00`).toISOString()
         : null;
 
@@ -299,8 +301,8 @@ export async function POST(req: NextRequest) {
     );
     const dropoffByIso = pickupDateTimeIso
       ? new Date(
-          new Date(pickupDateTimeIso).getTime() + travelMinutes * 60 * 1000
-        ).toISOString()
+        new Date(pickupDateTimeIso).getTime() + travelMinutes * 60 * 1000
+      ).toISOString()
       : null;
 
     const candidateInsert = {
@@ -420,10 +422,62 @@ export async function POST(req: NextRequest) {
       await incrementCouponRedemption(supabase, appliedCoupon.id);
     }
 
+    const recipientEmail = payload.email || data.email || data.customer_email;
+    if (recipientEmail) {
+      const passengerName =
+        payload.first_name || payload.last_name
+          ? `${payload.first_name ?? ""} ${payload.last_name ?? ""}`.trim()
+          : data.name || data.customer_name || "Valued Customer";
+
+      const bookingRef = data.id
+        ? `UTO-${String(data.id).slice(0, 8).toUpperCase()}`
+        : "UTO-BOOKING";
+
+      const pickupDateDisplay =
+        payload.pickup_date ||
+        (pickupDateTimeIso ? pickupDateTimeIso.split("T")[0] : "N/A");
+
+      const pickupTimeDisplay =
+        payload.pickup_time ||
+        (pickupDateTimeIso ? pickupDateTimeIso.split("T")[1]?.slice(0, 5) : "N/A");
+
+      const paymentMethodDisplay = paymentInfo
+        ? couponCoversFullFare
+          ? "Coupon Discount"
+          : "Credit Card (Stripe)"
+        : "Pay in Vehicle";
+
+      // Await email dispatch inside try/catch so serverless container waits for SMTP completion without failing response if SMTP has an error
+      try {
+        await sendBookingEmail({
+          to: recipientEmail,
+          type: "booking_confirmation",
+          data: {
+            bookingReference: bookingRef,
+            passengerName,
+            passengerEmail: recipientEmail,
+            pickupDate: pickupDateDisplay,
+            pickupTime: pickupTimeDisplay,
+            pickupAddress: payload.pickup.trim(),
+            dropoffAddress: payload.dropoff.trim(),
+            vehicleType: resolvedVehicle.displayName,
+            passengers: normalizedPassengers,
+            estimatedFare: chargeableFare,
+            paymentMethod: paymentMethodDisplay,
+            notes: payload.additional_note ?? undefined,
+          },
+        });
+      } catch (emailErr) {
+        console.error("[Booking Route] Failed to send confirmation email:", emailErr);
+      }
+    }
+
+
     return NextResponse.json(
       { booking: data, quote: discountedQuote, coupon: appliedCoupon },
       { status: 201 }
     );
+
   } catch (err) {
     return NextResponse.json(
       { error: (err as Error).message || "Failed to store booking." },
