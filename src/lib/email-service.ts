@@ -112,8 +112,8 @@ let cachedTransporter: nodemailer.Transporter | null = null;
 /**
  * Creates and returns a cached nodemailer Transporter.
  */
-export function getEmailTransporter(): nodemailer.Transporter {
-  if (cachedTransporter) return cachedTransporter;
+export function getEmailTransporter(forceRefresh = false): nodemailer.Transporter {
+  if (cachedTransporter && !forceRefresh) return cachedTransporter;
 
   const config = getSmtpConfig();
 
@@ -141,9 +141,6 @@ export function getEmailTransporter(): nodemailer.Transporter {
   return cachedTransporter;
 }
 
-
-
-
 /**
  * Verifies SMTP connection configuration and returns status.
  */
@@ -156,16 +153,18 @@ export async function verifySmtpConnection(): Promise<{ success: boolean; messag
         message: "SMTP password (SMTP_PASS or GMAIL_APP_PASSWORD) is not configured in environment.",
       };
     }
-    const transporter = getEmailTransporter();
+    const transporter = getEmailTransporter(true);
     await transporter.verify();
     return { success: true, message: "SMTP server connection verified successfully." };
   } catch (error) {
+    cachedTransporter = null;
     const err = error as Error & { code?: string; command?: string };
     const errorDetails = `[SMTP Connection Error] ${err.message} (Code: ${err.code || "UNKNOWN"}, Command: ${err.command || "N/A"})`;
     console.error(errorDetails, err);
     return { success: false, message: errorDetails };
   }
 }
+
 
 /**
  * Shared HTML Email Wrapper with modern, clean branding & fallback.
@@ -585,7 +584,9 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
       details: { response: info.response, envelope: info.envelope },
     };
   } catch (error) {
+    cachedTransporter = null;
     const err = error as Error & { code?: string; command?: string; responseCode?: number };
+
     const logDetails = {
       type: options.type,
       recipient: targetEmail,
