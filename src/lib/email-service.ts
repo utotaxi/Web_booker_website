@@ -1,10 +1,50 @@
 import nodemailer from "nodemailer";
-import dns from "dns";
+import dns, { Resolver } from "dns";
 
 try {
   dns.setDefaultResultOrder("ipv4first");
 } catch {
   // Safe fallback for Node runtimes
+}
+
+const publicResolver = new Resolver();
+try {
+  publicResolver.setServers(["8.8.8.8", "1.1.1.1", "8.8.4.4"]);
+} catch {
+  // Safe fallback
+}
+
+/**
+ * Custom DNS lookup helper for container environments (Railway, Docker)
+ * Guarantees resolution for smtp.gmail.com by querying public DNS (8.8.8.8/1.1.1.1)
+ * with hardcoded IPv4 fallbacks.
+ */
+function customDnsLookup(
+  hostname: string,
+  options: unknown,
+  callback: (err: Error | null, address: string, family: number) => void
+) {
+  if (hostname === "smtp.gmail.com" || hostname.includes("gmail")) {
+    publicResolver.resolve4("smtp.gmail.com", (err, addresses) => {
+      if (!err && addresses && addresses.length > 0) {
+        callback(null, addresses[0], 4);
+      } else {
+        const fallbacks = [
+          "142.250.102.108",
+          "173.194.76.108",
+          "74.125.133.108",
+          "192.178.158.108",
+        ];
+        const chosenIp = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+        callback(null, chosenIp, 4);
+      }
+    });
+    return;
+  }
+
+  dns.lookup(hostname, options as dns.LookupOneOptions, (err, address, family) => {
+    callback(err, address, family);
+  });
 }
 
 export type EmailType =
@@ -88,13 +128,19 @@ export function getEmailTransporter(): nodemailer.Transporter {
     port: config.port,
     secure: config.secure, // false for 587 (STARTTLS), true for 465
     auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
+    lookup: customDnsLookup,
+    tls: {
+      servername: config.host,
+      rejectUnauthorized: false,
+    },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
+  } as nodemailer.TransportOptions);
 
   return cachedTransporter;
 }
+
 
 
 
