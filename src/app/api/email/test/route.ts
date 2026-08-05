@@ -1,20 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySmtpConnection, sendBookingEmail } from "@/lib/email-service";
+import { verifySmtpConnection, sendBookingEmail, type EmailType } from "@/lib/email-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * GET /api/email/test — Verify SMTP connection without sending an email.
+ * Returns DNS resolution status, SMTP connectivity, and configuration details.
+ */
 export async function GET() {
     const verifyResult = await verifySmtpConnection();
-    return NextResponse.json(verifyResult);
+
+    // Add config summary (mask password)
+    const smtpUser = process.env.SMTP_USER || "bookings@utotransfer.co.uk";
+    const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+    const smtpPort = process.env.SMTP_PORT || "587";
+    const hasPassword = !!(process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD);
+    const hasResend = !!process.env.RESEND_API_KEY?.trim();
+
+    return NextResponse.json({
+        ...verifyResult,
+        config: {
+            host: smtpHost,
+            port: parseInt(smtpPort, 10),
+            user: smtpUser,
+            hasAppPassword: hasPassword,
+            provider: hasResend ? "resend" : "smtp",
+        },
+    });
 }
 
+/**
+ * POST /api/email/test — Send a test booking confirmation email.
+ * Body: { to?: string, type?: EmailType }
+ * Default recipient: bookings@utotransfer.co.uk
+ */
 export async function POST(req: NextRequest) {
     try {
         let testEmail = "bookings@utotransfer.co.uk";
+        let emailType: EmailType = "booking_confirmation";
         try {
             const body = await req.json();
             if (body?.to) testEmail = body.to;
+            if (body?.type) emailType = body.type;
         } catch {
             // Use default test email if no body provided
         }
@@ -31,12 +59,18 @@ export async function POST(req: NextRequest) {
             passengers: 2,
             estimatedFare: "65.00",
             paymentMethod: "Credit Card (Stripe)",
-            notes: "Test booking email configuration",
+            notes: "Test booking — email configuration verification",
+            driverName: "John Smith",
+            driverPhone: "+44 7700 900000",
+            vehicleModel: "Mercedes-Benz E-Class",
+            vehiclePlate: "UTO 1234",
         };
+
+        console.log(`[Email Test] Sending "${emailType}" test email to ${testEmail}`);
 
         const sendResult = await sendBookingEmail({
             to: testEmail,
-            type: "booking_confirmation",
+            type: emailType,
             data: testData,
         });
 
@@ -53,12 +87,17 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            message: `Test email sent successfully to ${testEmail}`,
+            message: `Test email ("${emailType}") sent successfully to ${testEmail}`,
             messageId: sendResult.messageId,
             sentFrom: "UTO Transfer <bookings@utotransfer.co.uk>",
+            details: sendResult.details,
         });
     } catch (err) {
         const error = err as Error;
-        return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+        console.error("[Email Test API Error]", error);
+        return NextResponse.json(
+            { success: false, error: error.message },
+            { status: 500 }
+        );
     }
 }

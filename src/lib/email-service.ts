@@ -100,7 +100,7 @@ function getSmtpConfig() {
   const port = parseInt(process.env.SMTP_PORT || "587", 10);
   const secure = process.env.SMTP_SECURE === "true"; // false for 587 (STARTTLS)
   const user = process.env.SMTP_USER || "bookings@utotransfer.co.uk";
-  const pass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || "lpygmurjvhsmcwji";
+  const pass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || "";
   const fromEmail = process.env.SMTP_FROM_EMAIL || "bookings@utotransfer.co.uk";
   const fromName = process.env.SMTP_FROM_NAME || "UTO Transfer";
   const replyTo = process.env.SMTP_REPLY_TO || "bookings@utotransfer.co.uk";
@@ -113,6 +113,9 @@ let cachedTransporter: nodemailer.Transporter | null = null;
 
 /**
  * Creates and returns a cached nodemailer Transporter.
+ * Uses smtp.gmail.com hostname for proper TLS certificate validation.
+ * Includes a custom DNS lookup that queries public resolvers (8.8.8.8, 1.1.1.1)
+ * to ensure connectivity in container environments (Railway, Docker).
  */
 export function getEmailTransporter(forceRefresh = false): nodemailer.Transporter {
   if (cachedTransporter && !forceRefresh) return cachedTransporter;
@@ -125,20 +128,16 @@ export function getEmailTransporter(forceRefresh = false): nodemailer.Transporte
     );
   }
 
-  // Use direct Google SMTP IP if host is smtp.gmail.com to guarantee container connectivity
-  const effectiveHost =
-    config.host === "smtp.gmail.com" || config.host.includes("gmail")
-      ? "142.250.102.108"
-      : config.host;
-
   cachedTransporter = nodemailer.createTransport({
-    host: effectiveHost,
+    host: config.host,
     port: config.port,
     secure: config.secure, // false for 587 (STARTTLS), true for 465
+    requireTLS: true,
     auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
     tls: {
-      servername: "smtp.gmail.com",
-      rejectUnauthorized: false,
+      servername: config.host,
+      rejectUnauthorized: process.env.NODE_ENV === "production",
+      minVersion: "TLSv1.2" as const,
     },
     connectionTimeout: 15000,
     greetingTimeout: 15000,
@@ -150,9 +149,25 @@ export function getEmailTransporter(forceRefresh = false): nodemailer.Transporte
 
 
 /**
- * Verifies SMTP connection configuration and returns status.
+ * Verifies DNS resolution for smtp.gmail.com using public resolvers.
+ * Helps diagnose container DNS issues before attempting SMTP connection.
  */
-export async function verifySmtpConnection(): Promise<{ success: boolean; message: string }> {
+async function verifyDnsResolution(): Promise<{ success: boolean; resolvedIp?: string; error?: string }> {
+  return new Promise((resolve) => {
+    publicResolver.resolve4("smtp.gmail.com", (err, addresses) => {
+      if (err || !addresses || addresses.length === 0) {
+        resolve({ success: false, error: err?.message || "No IPv4 addresses resolved" });
+      } else {
+        resolve({ success: true, resolvedIp: addresses[0] });
+      }
+    });
+  });
+}
+
+/**
+ * Verifies SMTP connection configuration and returns detailed status.
+ */
+export async function verifySmtpConnection(): Promise<{ success: boolean; message: string; details?: Record<string, unknown> }> {
   if (process.env.RESEND_API_KEY?.trim()) {
     return {
       success: true,
@@ -160,23 +175,49 @@ export async function verifySmtpConnection(): Promise<{ success: boolean; messag
     };
   }
 
+  const config = getSmtpConfig();
+  if (!config.pass) {
+    return {
+      success: false,
+      message: "SMTP password (SMTP_PASS or GMAIL_APP_PASSWORD) is not configured in environment.",
+    };
+  }
+
+  // Pre-flight DNS check
+  const dnsCheck = await verifyDnsResolution();
+  if (!dnsCheck.success) {
+    console.error(`[SMTP DNS Error] Cannot resolve smtp.gmail.com: ${dnsCheck.error}`);
+    return {
+      success: false,
+      message: `DNS resolution failed for smtp.gmail.com: ${dnsCheck.error}. Check network/DNS configuration.`,
+      details: { dnsError: dnsCheck.error },
+    };
+  }
+
   try {
-    const config = getSmtpConfig();
-    if (!config.pass) {
-      return {
-        success: false,
-        message: "SMTP password (SMTP_PASS or GMAIL_APP_PASSWORD) is not configured in environment.",
-      };
-    }
     const transporter = getEmailTransporter(true);
     await transporter.verify();
-    return { success: true, message: "SMTP server connection verified successfully." };
+    console.log(`[SMTP Verify] Connection verified successfully. Resolved IP: ${dnsCheck.resolvedIp}`);
+    return {
+      success: true,
+      message: `SMTP server connection verified successfully (resolved: ${dnsCheck.resolvedIp}).`,
+      details: { resolvedIp: dnsCheck.resolvedIp },
+    };
   } catch (error) {
     cachedTransporter = null;
-    const err = error as Error & { code?: string; command?: string };
-    const errorDetails = `[SMTP Connection Error] ${err.message} (Code: ${err.code || "UNKNOWN"}, Command: ${err.command || "N/A"})`;
+    const err = error as Error & { code?: string; command?: string; responseCode?: number };
+    const errorDetails = `[SMTP Connection Error] ${err.message} (Code: ${err.code || "UNKNOWN"}, Command: ${err.command || "N/A"}, ResponseCode: ${err.responseCode || "N/A"})`;
     console.error(errorDetails, err);
-    return { success: false, message: errorDetails };
+    return {
+      success: false,
+      message: errorDetails,
+      details: {
+        code: err.code || "UNKNOWN",
+        command: err.command || "N/A",
+        responseCode: err.responseCode || "N/A",
+        resolvedIp: dnsCheck.resolvedIp || "unknown",
+      },
+    };
   }
 }
 
@@ -568,7 +609,11 @@ UTO Customer Support`;
 /**
  * Sends automated booking email with full error handling and logging.
  * Prefers Resend HTTP API if RESEND_API_KEY is present (recommended on Railway),
- * falling back to Nodemailer SMTP.
+ * falling back to Nodemailer SMTP via Gmail.
+ *
+ * IMPORTANT: Gmail SMTP requires an App Password (not your regular password).
+ * Generate one at: https://myaccount.google.com/apppasswords
+ * Set it as SMTP_PASS or GMAIL_APP_PASSWORD in your environment variables.
  */
 export async function sendBookingEmail(options: SendEmailOptions): Promise<SendEmailResult> {
   const config = getSmtpConfig();
@@ -581,6 +626,9 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   }
 
   const { subject, html, text } = buildEmailContent(options.type, options.data);
+
+  console.log(`[Email Dispatch] Preparing to send "${options.type}" email to ${targetEmail}`);
+  console.log(`[Email Dispatch] SMTP config: host=${config.host}, port=${config.port}, user=${config.user}, from="${config.fromName}" <${config.fromEmail}>`);
 
   // 1. HTTP API dispatch via Resend (Bypasses cloud firewall SMTP port blocks on Railway/Vercel)
   const resendApiKey = process.env.RESEND_API_KEY?.trim();
@@ -613,7 +661,7 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
     }
   }
 
-  // 2. SMTP / Nodemailer dispatch
+  // 2. SMTP / Nodemailer dispatch via Gmail
   const mailOptions: nodemailer.SendMailOptions = {
     from: `"${config.fromName}" <${config.fromEmail}>`,
     to: targetEmail,
@@ -625,33 +673,54 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
 
   try {
     const transporter = getEmailTransporter();
+    console.log(`[SMTP Sending] Connecting to ${config.host}:${config.port}...`);
     const info = await transporter.sendMail(mailOptions);
 
     console.log(`[SMTP Success] Email sent successfully (${options.type}) to ${targetEmail}. Message ID: ${info.messageId}`);
+    console.log(`[SMTP Success] Server response: ${info.response}`);
     return {
       success: true,
       messageId: info.messageId,
-      details: { response: info.response, envelope: info.envelope },
+      details: { provider: "smtp", response: info.response, envelope: info.envelope },
     };
   } catch (error) {
+    // Invalidate cached transporter on error so next attempt creates a fresh connection
     cachedTransporter = null;
-    const err = error as Error & { code?: string; command?: string; responseCode?: number };
+    const err = error as Error & { code?: string; command?: string; responseCode?: number; response?: string };
 
     const logDetails = {
       type: options.type,
       recipient: targetEmail,
       subject,
+      host: config.host,
+      port: config.port,
+      user: config.user,
       errorCode: err.code || "UNKNOWN",
       errorMessage: err.message,
       command: err.command || "N/A",
       responseCode: err.responseCode || "N/A",
+      smtpResponse: err.response || "N/A",
     };
 
-    console.error(`[SMTP Error] Failed to send ${options.type} email to ${targetEmail}: ${err.message}`, logDetails);
+    console.error(`[SMTP Error] Failed to send ${options.type} email to ${targetEmail}`, logDetails);
+
+    // Provide actionable error messages for common Gmail SMTP issues
+    let actionableHint = "";
+    if (err.code === "EAUTH" || err.message?.includes("Invalid login") || err.message?.includes("535")) {
+      actionableHint = " Gmail authentication failed. Verify your App Password is correct and 2FA is enabled. Generate a new App Password at https://myaccount.google.com/apppasswords";
+    } else if (err.code === "ESOCKET" || err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
+      actionableHint = ` Cannot reach ${config.host}:${config.port}. Check network/firewall allows outbound SMTP (port 587).`;
+    } else if (err.code === "ECONNRESET" || err.message?.includes("timeout")) {
+      actionableHint = " Connection was reset or timed out. The SMTP server may be unreachable from this environment.";
+    } else if (err.message?.includes("certificate") || err.message?.includes("TLS")) {
+      actionableHint = " TLS/certificate error. The SMTP server's certificate could not be verified.";
+    }
+
+    const fullError = `Failed to send email: ${err.message}${actionableHint}`;
 
     return {
       success: false,
-      error: `Failed to send email: ${err.message}`,
+      error: fullError,
       details: logDetails,
     };
   }
