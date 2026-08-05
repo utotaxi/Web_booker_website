@@ -49,16 +49,17 @@ export interface SendEmailResult {
  */
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = parseInt(process.env.SMTP_PORT || "587", 10);
-  const secure = process.env.SMTP_SECURE === "true" || port === 465;
+  const port = parseInt(process.env.SMTP_PORT || "465", 10);
+  const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === "true" : port === 465;
   const user = process.env.SMTP_USER || "bookings@utotransfer.co.uk";
-  const pass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || "";
+  const pass = process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || "lpygmurjvhsmcwji";
   const fromEmail = process.env.SMTP_FROM_EMAIL || "bookings@utotransfer.co.uk";
   const fromName = process.env.SMTP_FROM_NAME || "UTO Transfer";
   const replyTo = process.env.SMTP_REPLY_TO || "bookings@utotransfer.co.uk";
 
   return { host, port, secure, user, pass, fromEmail, fromName, replyTo };
 }
+
 
 let cachedTransporter: nodemailer.Transporter | null = null;
 
