@@ -123,14 +123,19 @@ export function getEmailTransporter(forceRefresh = false): nodemailer.Transporte
     );
   }
 
+  // Use direct Google SMTP IP if host is smtp.gmail.com to guarantee container connectivity
+  const effectiveHost =
+    config.host === "smtp.gmail.com" || config.host.includes("gmail")
+      ? "142.250.102.108"
+      : config.host;
+
   cachedTransporter = nodemailer.createTransport({
-    host: config.host,
+    host: effectiveHost,
     port: config.port,
     secure: config.secure, // false for 587 (STARTTLS), true for 465
     auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
-    lookup: customDnsLookup,
     tls: {
-      servername: config.host,
+      servername: "smtp.gmail.com",
       rejectUnauthorized: false,
     },
     connectionTimeout: 15000,
@@ -140,6 +145,7 @@ export function getEmailTransporter(forceRefresh = false): nodemailer.Transporte
 
   return cachedTransporter;
 }
+
 
 /**
  * Verifies SMTP connection configuration and returns status.
