@@ -375,8 +375,8 @@ function wrapHtmlEmail(title: string, bodyContent: string): string {
 <body>
   <div class="email-container">
     <div class="email-header">
-      <h1>UTO Transfer</h1>
-      <p>Premium Chauffeur & Transfer Services</p>
+      <h1>UTO</h1>
+      <p>Reliable transfers, anytime.</p>
     </div>
     <div class="email-body">
       ${bodyContent}
@@ -385,7 +385,7 @@ function wrapHtmlEmail(title: string, bodyContent: string): string {
       <p>Thank you for travelling with UTO.</p>
       <p>Kind regards,<br><strong>UTO Customer Support</strong></p>
       <p style="margin-top: 12px; font-size: 11px; color: #9ca3af;">
-        This email was sent to you regarding your booking with UTO Transfer.
+        This email was sent to you regarding your booking with UTO.
       </p>
     </div>
   </div>

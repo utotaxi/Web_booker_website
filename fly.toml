@@ -1,27 +1,28 @@
-# Fly.io app config for UTO Web Booker.
-# Docs: https://fly.io/docs/reference/configuration/
+# fly.toml app configuration file generated for uto-web-booker on 2026-08-06T20:57:40+05:30
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "uto-web-booker"   # ← change to your Fly app name (must be globally unique)
-primary_region = "lhr"   # London — pick the region closest to your users
+app = 'uto-web-booker'
+primary_region = 'lhr'
 
 [build]
-  # NEXT_PUBLIC_* values are PUBLIC (client-facing). They must be present at
-  # BUILD time so Next.js can inline them into the client bundle. Set them here
-  # with the same values as your .env.local. These are not secrets.
+  dockerfile = 'Dockerfile'
   [build.args]
-    NEXT_PUBLIC_GOOGLE_MAPS_API_KEY = "REPLACE_WITH_GOOGLE_MAPS_KEY"
-    NEXT_PUBLIC_SUPABASE_URL = "REPLACE_WITH_SUPABASE_URL"
-    NEXT_PUBLIC_SUPABASE_ANON_KEY = "REPLACE_WITH_SUPABASE_ANON_KEY"
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "REPLACE_WITH_STRIPE_PUBLISHABLE_KEY"
+    NEXT_PUBLIC_GOOGLE_MAPS_API_KEY = "AIzaSyAkB-0o6vqtRtY2QG-YNPMQkPhu9smcHLc"
+    NEXT_PUBLIC_SUPABASE_URL = "https://tadqvfnqykmjdxzpoczp.supabase.co"
+    NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhZHF2Zm5xeWttamR4enBvY3pwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NDQyNTEsImV4cCI6MjA4ODEyMDI1MX0.0Fhl0RuTFk-qtPQ5Au7iZrk9mnE8Gieth7PWdc12rxo"
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = ""
 
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
 [[vm]]
-  memory = "512mb"
-  cpu_kind = "shared"
+  memory = '512mb'
+  cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 512
