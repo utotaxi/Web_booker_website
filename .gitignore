@@ -42,3 +42,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .npm-cache/
+# Windows-path artifact created by a misconfigured npm cache dir
+**/.npm-cache/

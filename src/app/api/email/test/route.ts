@@ -16,7 +16,7 @@ export async function GET() {
     const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
     const smtpPort = process.env.SMTP_PORT || "587";
     const hasPassword = !!(process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD);
-    const hasResend = !!process.env.RESEND_API_KEY?.trim();
+    const provider = "smtp";
 
     return NextResponse.json({
         ...verifyResult,
@@ -25,7 +25,7 @@ export async function GET() {
             port: parseInt(smtpPort, 10),
             user: smtpUser,
             hasAppPassword: hasPassword,
-            provider: hasResend ? "resend" : "smtp",
+            provider,
         },
     });
 }
