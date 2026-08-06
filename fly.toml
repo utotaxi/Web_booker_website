@@ -1,0 +1,27 @@
+# Fly.io app config for UTO Web Booker.
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "uto-web-booker"   # ← change to your Fly app name (must be globally unique)
+primary_region = "lhr"   # London — pick the region closest to your users
+
+[build]
+  # NEXT_PUBLIC_* values are PUBLIC (client-facing). They must be present at
+  # BUILD time so Next.js can inline them into the client bundle. Set them here
+  # with the same values as your .env.local. These are not secrets.
+  [build.args]
+    NEXT_PUBLIC_GOOGLE_MAPS_API_KEY = "REPLACE_WITH_GOOGLE_MAPS_KEY"
+    NEXT_PUBLIC_SUPABASE_URL = "REPLACE_WITH_SUPABASE_URL"
+    NEXT_PUBLIC_SUPABASE_ANON_KEY = "REPLACE_WITH_SUPABASE_ANON_KEY"
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "REPLACE_WITH_STRIPE_PUBLISHABLE_KEY"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

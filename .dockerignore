@@ -1,0 +1,26 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies (rebuilt in image)
+node_modules
+**/.npm-cache
+**/.npm-cache/
+
+# Next.js build output (rebuilt in image)
+.next
+out
+
+# Local env files (passed via build args / fly secrets instead)
+.env*
+!.env.production.example
+
+# Misc
+.DS_Store
+*.tsbuildinfo
+npm-debug.log*
+.vscode
+.idea
+README.md
+supabase_*.sql
+scripts
