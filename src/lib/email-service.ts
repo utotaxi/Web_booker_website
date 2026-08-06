@@ -56,7 +56,8 @@ export type EmailType =
   | "trip_started"
   | "trip_completed"
   | "receipt"
-  | "booking_cancelled";
+  | "booking_cancelled"
+  | "booking_reminder";
 
 export interface BookingEmailData {
   bookingReference: string;
@@ -76,6 +77,8 @@ export interface BookingEmailData {
   vehicleModel?: string;
   vehiclePlate?: string;
   cancellationReason?: string;
+  /** Human-readable window for reminder emails, e.g. "in 48 hours" / "in 30 days". */
+  reminderWindow?: string;
 }
 
 export interface SendEmailOptions {
@@ -592,19 +595,118 @@ UTO Customer Support`;
     }
 
     case "trip_completed": {
-      const subject = `Trip Completed - UTO Transfer (${data.bookingReference})`;
-      const text = `Hi ${data.passengerName},\n\nYour trip (${data.bookingReference}) has been completed.\nThank you for travelling with UTO. We hope you had a pleasant journey!`;
+      const receiptNo = `RC-${data.bookingReference}`;
+      const tripDate = data.pickupDate || "N/A";
+      const reviewLink = "https://g.page/r/CXeCrCQPe8vaEBE/review";
+      const subject = `Your UTO Trip Receipt - ${data.bookingReference}`;
+
+      const text = `Hi ${data.passengerName},
+
+Thank you for travelling with UTO.
+Your journey has been completed successfully. Please find your receipt below.
+
+TRIP RECEIPT
+Receipt No.: ${receiptNo}
+Booking Reference: ${data.bookingReference}
+Trip Date: ${tripDate}
+Payment Status: Paid
+Amount: £${fareDisplay}
+
+Passenger
+Name: ${data.passengerName}
+
+Journey Details
+Pickup Address
+${data.pickupAddress}
+Destination
+${data.dropoffAddress}
+Pickup Time: ${data.pickupTime}
+
+Thank you for choosing UTO.
+
+A quick favour 😊
+If we've made your journey a little easier today, we'd be grateful if you could share your experience with a Google review. Every review helps a local business like ours grow and continue providing great service.
+
+Rate your experience
+Your feedback helps us improve our service and supports our drivers. ⭐⭐⭐⭐⭐
+Leave a review here: ⭐ ${reviewLink}
+
+Thank you for your support – it truly means a lot!
+
+Kind Regards, UTO`;
+
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
-        <p>Thank you for travelling with UTO. Your trip has been completed successfully.</p>
+        <p>Thank you for travelling with UTO.<br>Your journey has been completed successfully. Please find your receipt below.</p>
+
         <div class="details-box">
-          <div class="details-title">Trip Summary</div>
-          <div class="detail-row"><div class="detail-label">Booking Reference</div><div class="detail-value">${data.bookingReference}</div></div>
-          <div class="detail-row"><div class="detail-label">Total Fare</div><div class="detail-value">£${fareDisplay}</div></div>
-          <div class="detail-row"><div class="detail-label">Payment Method</div><div class="detail-value">${data.paymentMethod}</div></div>
+          <div class="details-title">TRIP RECEIPT</div>
+
+          <div class="detail-row">
+            <div class="detail-label">Receipt No.</div>
+            <div class="detail-value">${receiptNo}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Booking Reference</div>
+            <div class="detail-value" style="font-weight: 700; color: #2563eb;">${data.bookingReference}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Trip Date</div>
+            <div class="detail-value">${tripDate}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Payment Status</div>
+            <div class="detail-value" style="color: #16a34a; font-weight: 600;">Paid</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Amount</div>
+            <div class="detail-value" style="font-weight: 700;">£${fareDisplay}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Passenger Name</div>
+            <div class="detail-value">${data.passengerName}</div>
+          </div>
         </div>
+
+        <div class="details-box">
+          <div class="details-title">Journey Details</div>
+          <div class="detail-row">
+            <div class="detail-label">Pickup Address</div>
+            <div class="detail-value">${data.pickupAddress}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Destination</div>
+            <div class="detail-value">${data.dropoffAddress}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Pickup Time</div>
+            <div class="detail-value">${data.pickupTime}</div>
+          </div>
+        </div>
+
+        <p style="margin-top: 8px;">Thank you for choosing UTO.</p>
+
+        <div class="policy-box" style="background-color: #eff6ff; border-left: 4px solid #3b82f6; color: #1e40af;">
+          <div class="policy-title" style="color: #1e3a8a;">A quick favour 😊</div>
+          <p style="margin: 0 0 8px 0;">If we've made your journey a little easier today, we'd be grateful if you could share your experience with a Google review. Every review helps a local business like ours grow and continue providing great service.</p>
+          <p style="margin: 0 0 8px 0;"><strong>Rate your experience</strong><br>Your feedback helps us improve our service and supports our drivers. ⭐⭐⭐⭐⭐</p>
+          <p style="margin: 0;">Leave a review here: ⭐ <a href="${reviewLink}" style="color: #2563eb;">${reviewLink}</a></p>
+        </div>
+
+        <p>Thank you for your support – it truly means a lot!</p>
+
+        <p style="margin-top: 16px;">
+          Kind Regards,<br>
+          <strong>UTO</strong>
+        </p>
       `;
-      return { subject, html: wrapHtmlEmail("Trip Completed", htmlBody), text };
+
+      return { subject, html: wrapHtmlEmail("Your UTO Trip Receipt", htmlBody), text };
     }
 
     case "receipt": {
@@ -639,6 +741,124 @@ UTO Customer Support`;
         <p>If you require further assistance or would like to rebook, please contact our support team.</p>
       `;
       return { subject, html: wrapHtmlEmail("Booking Cancelled", htmlBody), text };
+    }
+
+    case "booking_reminder": {
+      const windowLabel = data.reminderWindow?.trim() || "soon";
+      const subject = `UTO Journey Reminder ${windowLabel} - (${data.bookingReference})`;
+
+      // Plain-text body matches the client-specified reminder copy verbatim.
+      const text = `Hi ${data.passengerName},
+
+This is a friendly reminder that you have an upcoming journey booked with UTO.
+
+Booking Details
+Booking Reference: ${data.bookingReference}
+Pickup Date: ${data.pickupDate}
+Pickup Time: ${data.pickupTime}
+Pickup Address:
+${data.pickupAddress}
+Destination:
+${data.dropoffAddress}
+Vehicle Type: ${data.vehicleType}
+Passengers: ${data.passengers}
+Estimated Fare: £${fareDisplay}
+Payment Method: ${data.paymentMethod}
+
+Need to make changes?
+If you need to update your booking or cancel your journey, please do so as soon as possible by replying on this email.
+Free cancellation is available up to 3 hours before your scheduled pickup time. If your booking is cancelled at least 3 hours in advance, you will receive a full refund (where applicable). Cancellations made less than 3 hours before pickup may be subject to full cancellation charges.
+
+Journey Information
+If you would like to make any changes to your journey (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.
+Any changes are subject to the driver's agreement and may incur additional charges.
+
+If you have any questions or require assistance, please don't hesitate to contact us.
+
+Thank you for choosing UTO. We look forward to taking you to your destination safely and comfortably.
+
+Kind regards,
+UTO Customer Support
+📞 07596266901
+🌐 www.utotransfer.co.uk`;
+
+      const htmlBody = `
+        <p>Hi ${data.passengerName},</p>
+        <p>This is a friendly reminder that you have an upcoming journey booked with UTO.</p>
+
+        <div class="details-box">
+          <div class="details-title">Booking Details</div>
+
+          <div class="detail-row">
+            <div class="detail-label">Booking Reference</div>
+            <div class="detail-value" style="font-weight: 700; color: #2563eb;">${data.bookingReference}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Pickup Date</div>
+            <div class="detail-value">${data.pickupDate}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Pickup Time</div>
+            <div class="detail-value">${data.pickupTime}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Pickup Address</div>
+            <div class="detail-value">${data.pickupAddress}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Destination</div>
+            <div class="detail-value">${data.dropoffAddress}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Vehicle Type</div>
+            <div class="detail-value">${data.vehicleType}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Passengers</div>
+            <div class="detail-value">${data.passengers}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Estimated Fare</div>
+            <div class="detail-value" style="font-weight: 700;">£${fareDisplay}</div>
+          </div>
+
+          <div class="detail-row">
+            <div class="detail-label">Payment Method</div>
+            <div class="detail-value">${data.paymentMethod}</div>
+          </div>
+        </div>
+
+        <div class="policy-box">
+          <div class="policy-title">Need to make changes?</div>
+          <p style="margin: 0 0 8px 0;">If you need to update your booking or cancel your journey, please do so as soon as possible by replying on this email.</p>
+          <p style="margin: 0 0 8px 0;">Free cancellation is available up to 3 hours before your scheduled pickup time. If your booking is cancelled at least 3 hours in advance, you will receive a full refund (where applicable). Cancellations made less than 3 hours before pickup may be subject to full cancellation charges.</p>
+        </div>
+
+        <div class="details-box" style="border-left: 4px solid #3b82f6;">
+          <div class="policy-title" style="color: #1e3a8a;">Journey Information</div>
+          <p style="margin: 0 0 8px 0;">If you would like to make any changes to your journey (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.</p>
+          <p style="margin: 0;">Any changes are subject to the driver's agreement and may incur additional charges.</p>
+        </div>
+
+        <p>If you have any questions or require assistance, please don't hesitate to contact us.</p>
+        <p>Thank you for choosing UTO. We look forward to taking you to your destination safely and comfortably.</p>
+
+        <p style="margin-top: 16px;">
+          Kind regards,<br>
+          <strong>UTO Customer Support</strong><br>
+          📞 07596266901<br>
+          🌐 <a href="https://www.utotransfer.co.uk" style="color: #2563eb;">www.utotransfer.co.uk</a>
+        </p>
+      `;
+
+      return { subject, html: wrapHtmlEmail("UTO Journey Reminder", htmlBody), text };
     }
   }
 }

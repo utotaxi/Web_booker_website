@@ -56,12 +56,16 @@ flyctl secrets set \
   SMTP_FROM_EMAIL="bookings@utotransfer.co.uk" \
   SMTP_FROM_NAME="UTO Transfer" \
   SMTP_REPLY_TO="bookings@utotransfer.co.uk" \
-  WEB_BOOKER_RIDER_ID="optional-rider-uuid"
+  WEB_BOOKER_RIDER_ID="optional-rider-uuid" \
+  CRON_SECRET="pick-a-long-random-string"
 ```
 
 > The `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` /
 > `GMAIL_USER_EMAIL` vars from your old `.env.local` are **no longer used**
 > (Gmail API/OAuth2 path was removed) — do not set them.
+>
+> `CRON_SECRET` protects the `/api/cron/reminders` endpoint (see §9). Omit it
+> only for local dev.
 
 ## 5. Deploy
 
@@ -104,3 +108,121 @@ utotransfer.co.uk.  TXT  "v=spf1 include:_spf.google.com ~all"
 DKIM for Google Workspace is configured in the Google Admin console →
 Apps → Google Workspace → Gmail → Authenticate email. This keeps booking
 confirmations out of recipients' spam folders.
+
+---
+
+## 9. Booking reminder emails (automated)
+
+The app sends reminder emails automatically before each pickup at these windows:
+
+- **180 days, 60 days, 30 days** before pickup (long-lead reminders — only fire
+  when a booking was made that far in advance).
+- **48 hours, 24 hours, 12 hours, 6 hours, 4 hours** before pickup.
+
+The reminder copy matches the agreed template (booking details, free-cancellation
+up to 3 hours before, journey-change policy, and the UTO Customer Support sign-off
+with 📞 07596266901 and 🌐 www.utotransfer.co.uk).
+
+### 9.1 One-time DB migration
+
+Run `supabase_add_reminders.sql` in the Supabase SQL Editor:
+
+- https://supabase.com/dashboard/project/tadqvfnqykmjdxzpoczp/sql/new
+
+This adds the `reminder_emails_sent jsonb` column used to dedupe so a reminder
+is never sent twice for the same booking.
+
+### 9.2 How it works
+
+`src/lib/booking-reminders.ts` (`processDueReminders`) scans upcoming bookings,
+finds windows whose trigger time (`pickup_at − offset`) has passed and that
+weren't already sent, and dispatches a `booking_reminder` email via the same
+SMTP transport as confirmations. Each fired window is recorded in
+`reminder_emails_sent`, so the job is idempotent and safe to run repeatedly.
+
+It is exposed at `GET/POST /api/cron/reminders`, protected by the `CRON_SECRET`
+header (`x-cron-secret`), so it can be called by an external scheduler.
+
+### 9.3 Schedule it (Fly auto-stops machines, so use an external cron)
+
+Fly's `auto_stop_machines = 'stop'` means an in-process `setInterval` timer
+would die when the machine spins down. Use an external cron that pings the
+endpoint every **15–30 minutes**:
+
+**Option A — cron-job.org (free, no infra):**
+- URL: `https://<your-app>.fly.dev/api/cron/reminders`
+- Method: `GET`
+- Headers: `x-cron-secret: <CRON_SECRET>`
+- Schedule: every 15 minutes (`*/15 * * * *`)
+
+**Option B — GitHub Actions** (`.github/workflows/reminders.yml`):
+```yaml
+name: UTO reminder emails
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsS -X GET \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://${{ secrets.APP_DOMAIN }}/api/cron/reminders"
+```
+
+**Option C — Fly Machine cron** (if you prefer to keep it on Fly):
+```sh
+flyctl machines run --command "curl -fsS -X GET -H 'x-cron-secret: <CRON_SECRET>' http://localhost:3000/api/cron/reminders" --schedule "*/15 * * * *"
+```
+
+### 9.4 Test it
+
+```sh
+# Local dev (CRON_SECRET unset = allowed with a warning)
+curl http://localhost:3000/api/cron/reminders
+
+# Production (with secret)
+curl -H "x-cron-secret: $CRON_SECRET" https://<your-app>.fly.dev/api/cron/reminders
+```
+
+Response includes `scanned`, `skipped`, `sent`, and `failed` arrays so you can
+see exactly which bookings got which window. You can also send a one-off test
+reminder via the existing test endpoint:
+```sh
+curl -X POST https://<your-app>.fly.dev/api/email/test \
+  -H "Content-Type: application/json" \
+  -d '{"type":"booking_reminder","to":"<your-email>"}'
+```
+
+### 9.5 Trip-completed receipt (triggered on completion)
+
+When a trip finishes, your driver / dispatch system should call:
+
+```sh
+curl -X POST https://<your-app>.fly.dev/api/bookings/complete \
+  -H "Content-Type: application/json" \
+  -H "x-cron-secret: $CRON_SECRET" \
+  -d '{"id":"<supabase-row-id>"}'
+# or by reference:  -d '{"bookingReference":"UTO-AB12CD34"}'
+```
+
+This marks the booking `status = "completed"` and sends the `trip_completed`
+receipt email (with the Google review request ⭐
+https://g.page/r/CXeCrCQPe8vaEBE/review). It's idempotent — calling it again on
+an already-completed booking does nothing unless you pass `{"id":"...","force":true}`.
+
+Test the template without touching a real booking:
+```sh
+curl -X POST https://<your-app>.fly.dev/api/email/test \
+  -H "Content-Type: application/json" \
+  -d '{"type":"trip_completed","to":"<your-email>"}'
+```
+
+### 9.6 Env vars summary
+
+| Variable | Purpose |
+|---|---|
+| `CRON_SECRET` | Protects `/api/cron/reminders` and `/api/bookings/complete` |
+| `SMTP_*` | Same transport as confirmations |
+| `SUPABASE_SERVICE_ROLE_KEY` | Reads/writes `later_bookings` for reminders |
