@@ -1,5 +1,4 @@
 import nodemailer from "nodemailer";
-import { Resend } from "resend";
 import dns, { Resolver } from "dns";
 
 try {
@@ -212,13 +211,6 @@ async function verifyDnsResolution(): Promise<{ success: boolean; resolvedIp?: s
  * Verifies SMTP connection configuration and returns detailed status.
  */
 export async function verifySmtpConnection(): Promise<{ success: boolean; message: string; details?: Record<string, unknown> }> {
-  if (process.env.RESEND_API_KEY?.trim()) {
-    return {
-      success: true,
-      message: "Resend HTTP API key is configured. Email dispatch active via Resend.",
-    };
-  }
-
   const config = getSmtpConfig();
   if (!config.pass) {
     return {
@@ -653,12 +645,13 @@ UTO Customer Support`;
 
 /**
  * Sends automated booking email with full error handling and logging.
- * Prefers Resend HTTP API if RESEND_API_KEY is present (recommended on Railway),
- * falling back to Nodemailer SMTP via Gmail.
+ * Uses Nodemailer SMTP via Gmail (App Password auth) as the sole transport.
  *
- * IMPORTANT: Gmail SMTP requires an App Password (not your regular password).
- * Generate one at: https://myaccount.google.com/apppasswords
- * Set it as SMTP_PASS or GMAIL_APP_PASSWORD in your environment variables.
+ * - Gmail SMTP requires an App Password (not your regular password).
+ * - Generate one at: https://myaccount.google.com/apppasswords
+ * - Set it as SMTP_PASS or GMAIL_APP_PASSWORD in your environment variables.
+ * - NOTE: Railway/Vercel block outbound SMTP ports 587/465. This path
+ *   requires a host that allows outbound SMTP.
  */
 export async function sendBookingEmail(options: SendEmailOptions): Promise<SendEmailResult> {
   const config = getSmtpConfig();
@@ -675,40 +668,9 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   console.log(`[Email Dispatch] Preparing to send "${options.type}" email to ${targetEmail}`);
   console.log(`[Email Dispatch] SMTP config: host=${config.host}, port=${config.port}, user=${config.user}, from="${config.fromName}" <${config.fromEmail}>`);
 
-  // 1. HTTP API dispatch via Resend (Bypasses cloud firewall SMTP port blocks on Railway/Vercel)
-  const resendApiKey = process.env.RESEND_API_KEY?.trim();
-  if (resendApiKey) {
-    try {
-      const resend = new Resend(resendApiKey);
-      const fromAddress = process.env.RESEND_FROM_EMAIL?.trim() || `"${config.fromName}" <onboarding@resend.dev>`;
-      const resendResult = await resend.emails.send({
-        from: fromAddress,
-        to: targetEmail,
-        replyTo: config.replyTo,
-        subject,
-        html,
-        text,
-      });
-
-      if (resendResult.error) {
-        console.error("[Resend Error]", resendResult.error);
-        throw new Error(resendResult.error.message);
-      }
-
-      console.log(`[Resend Success] Email sent successfully (${options.type}) to ${targetEmail}. ID: ${resendResult.data?.id}`);
-      return {
-        success: true,
-        messageId: resendResult.data?.id,
-        details: { provider: "resend", data: resendResult.data },
-      };
-    } catch (resendErr) {
-      console.warn("[Resend Fallback] Resend HTTP API failed, falling back to Nodemailer SMTP:", (resendErr as Error).message);
-    }
-  }
-
-  // 2. SMTP / Nodemailer dispatch via Gmail
+  // SMTP / Nodemailer dispatch via Gmail.
   // Try port 587 (STARTTLS) first, fall back to port 465 (SSL).
-  // Railway blocks outbound SMTP ports — see Resend option above for Railway deployments.
+  // Requires a host that allows outbound SMTP (Railway/Vercel block these ports).
   const portsToTry = config.port === 587 ? [587, 465] : [config.port, 587, 465];
 
   const mailOptions: nodemailer.SendMailOptions = {
@@ -773,7 +735,7 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
     } else if (err.code === "ESOCKET" || err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
       actionableHint = ` Cannot reach SMTP server on any port. Check network/firewall allows outbound SMTP.`;
     } else if (err.code === "ECONNRESET" || err.code === "ETIMEDOUT" || err.message?.includes("timeout")) {
-      actionableHint = " All SMTP ports blocked or timed out. This is expected on Railway/Vercel — use the Resend HTTP API instead. Set RESEND_API_KEY in your environment variables.";
+      actionableHint = " All SMTP ports blocked or timed out. Verify the production host allows outbound SMTP (ports 587/465); cloud hosts like Railway/Vercel block these ports.";
     } else if (err.message?.includes("certificate") || err.message?.includes("TLS")) {
       actionableHint = " TLS/certificate error. The SMTP server's certificate could not be verified.";
     }
