@@ -24,3 +24,6 @@ npm-debug.log*
 README.md
 supabase_*.sql
 scripts
+
+# Reference / template copy — broken types, never part of the production build
+replicate
