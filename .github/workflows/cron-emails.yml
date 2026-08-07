@@ -1,0 +1,40 @@
+# Triggers the automated email crons on Fly every 5 minutes.
+#
+# One-time setup: add CRON_SECRET as a repository Actions secret
+# (Settings → Secrets and variables → Actions → New repository secret),
+# or run: gh secret set CRON_SECRET -b main
+#
+# Hits:
+#   - /api/cron/driver-assignments  → sends the "driver assigned" email to
+#     riders whose booking just moved to status=driver_accepted.
+#   - /api/cron/reminders            → sends due pickup-reminder emails.
+#
+# Both endpoints are idempotent (per-booking dedupe markers), so a missed or
+# duplicated run is harmless.
+name: Automated Email Crons
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub rounds scheduled runs to the 5-minute mark and
+    # may delay under load — fine here, these are informational emails.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger driver-assignment notifier
+        run: |
+          curl -fsS -X GET \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "user-agent: github-actions-cron" \
+            "${{ vars.APP_URL || 'https://uto-web-booker.fly.dev' }}/api/cron/driver-assignments" \
+            || true
+      - name: Trigger booking reminders
+        run: |
+          curl -fsS -X GET \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "user-agent: github-actions-cron" \
+            "${{ vars.APP_URL || 'https://uto-web-booker.fly.dev' }}/api/cron/reminders" \
+            || true
