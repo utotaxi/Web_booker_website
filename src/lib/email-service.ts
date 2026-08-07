@@ -98,6 +98,12 @@ export interface SendEmailResult {
 }
 
 /**
+ * Support contact shown to passengers in transactional emails. Override at
+ * deploy time via UTO_SUPPORT_PHONE if the number ever changes.
+ */
+const UTO_SUPPORT_PHONE = process.env.UTO_SUPPORT_PHONE?.trim() || "07596266901";
+
+/**
  * Retrieves SMTP configuration from environment variables with defaults matching client spec.
  */
 function getSmtpConfig() {
@@ -537,25 +543,59 @@ UTO Customer Support`;
 
     case "driver_assigned": {
       const subject = `Driver Assigned - UTO Transfer (${data.bookingReference})`;
-      const driverInfo = data.driverName ? `${data.driverName} (${data.driverPhone || "Contact via App"})` : "Assigned Driver";
-      // The /api/bookings/assign route sends vehicleRegistration (preferred),
-      // but older callers may still pass vehiclePlate — fall back so the plate
-      // always shows.
-      const plate = data.vehicleRegistration?.trim() || data.vehiclePlate?.trim();
-      const vehicleInfo =
-        [data.vehicleModel, plate].filter(Boolean).join(" - ") || data.vehicleType;
-      const text = `Hi ${data.passengerName},\n\nA driver has been assigned to your booking (${data.bookingReference}).\nDriver: ${driverInfo}\nVehicle: ${vehicleInfo}\nPickup Time: ${data.pickupTime} on ${data.pickupDate}.\n\nThank you for choosing UTO.`;
+      const driverName = data.driverName?.trim() || "Your assigned driver";
+      const vehicleMake = data.vehicleMake?.trim() || "";
+      const vehicleModel = data.vehicleModel?.trim() || "";
+      const vehicleColour = data.vehicleColour?.trim() || "";
+      // Prefer vehicleRegistration; fall back to vehiclePlate for older callers.
+      const registration =
+        data.vehicleRegistration?.trim() || data.vehiclePlate?.trim() || "";
+      const driverPhone = data.driverPhone?.trim() || "";
+      const eta = data.eta?.trim() || "";
+      const vehicleLine = [vehicleMake, vehicleModel].filter(Boolean).join(" ") || data.vehicleType;
+
+      const text = `Hi ${data.passengerName},
+
+Good news! Your driver has now been assigned.
+
+Driver Details
+Driver Name: ${driverName}
+Vehicle: ${vehicleLine}${vehicleColour ? `\nVehicle Colour: ${vehicleColour}` : ""}${registration ? `\nRegistration: ${registration}` : ""}${driverPhone ? `\nDriver Phone: ${driverPhone}` : ""}${eta ? `\nEstimated Arrival Time: ${eta}` : ""}
+Pickup Address: ${data.pickupAddress}
+Destination: ${data.dropoffAddress}
+
+If you have any difficulty locating your driver, please contact them directly or call our support team on ${UTO_SUPPORT_PHONE}.
+
+Journey Changes
+If you would like to make any changes to your journey after your driver has been assigned (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.
+Any changes to the original booking are subject to the driver's agreement and may not always be possible due to scheduling or other commitments.
+Please note that additional charges may apply for any extra distance, waiting time, or changes to your booked journey. Any additional fare will be calculated based on the updated trip details.
+
+We wish you a pleasant journey.
+Thank you for choosing UTO.`;
+
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
-        <p>Great news! A driver has been assigned to your upcoming booking.</p>
+        <p>Good news! Your driver has now been assigned.</p>
         <div class="details-box">
-          <div class="details-title">Driver & Booking Details</div>
-          <div class="detail-row"><div class="detail-label">Booking Reference</div><div class="detail-value">${data.bookingReference}</div></div>
-          <div class="detail-row"><div class="detail-label">Driver</div><div class="detail-value">${driverInfo}</div></div>
-          <div class="detail-row"><div class="detail-label">Vehicle</div><div class="detail-value">${vehicleInfo}</div></div>
-          <div class="detail-row"><div class="detail-label">Pickup Date & Time</div><div class="detail-value">${data.pickupDate} at ${data.pickupTime}</div></div>
+          <div class="details-title">Driver Details</div>
+          <div class="detail-row"><div class="detail-label">Driver Name</div><div class="detail-value">${driverName}</div></div>
+          <div class="detail-row"><div class="detail-label">Vehicle</div><div class="detail-value">${vehicleLine}</div></div>
+          ${vehicleColour ? `<div class="detail-row"><div class="detail-label">Vehicle Colour</div><div class="detail-value">${vehicleColour}</div></div>` : ""}
+          ${registration ? `<div class="detail-row"><div class="detail-label">Registration</div><div class="detail-value">${registration}</div></div>` : ""}
+          ${driverPhone ? `<div class="detail-row"><div class="detail-label">Driver Phone</div><div class="detail-value">${driverPhone}</div></div>` : ""}
+          ${eta ? `<div class="detail-row"><div class="detail-label">Estimated Arrival Time</div><div class="detail-value">${eta}</div></div>` : ""}
           <div class="detail-row"><div class="detail-label">Pickup Address</div><div class="detail-value">${data.pickupAddress}</div></div>
+          <div class="detail-row"><div class="detail-label">Destination</div><div class="detail-value">${data.dropoffAddress}</div></div>
         </div>
+        <p>If you have any difficulty locating your driver, please contact them directly or call our support team on <strong>${UTO_SUPPORT_PHONE}</strong>.</p>
+        <div class="policy-box">
+          <div class="policy-title">Journey Changes</div>
+          <p style="margin: 0 0 8px 0;">If you would like to make any changes to your journey after your driver has been assigned (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.</p>
+          <p style="margin: 0 0 8px 0;">Any changes to the original booking are subject to the driver's agreement and may not always be possible due to scheduling or other commitments.</p>
+          <p style="margin: 0;">Please note that additional charges may apply for any extra distance, waiting time, or changes to your booked journey. Any additional fare will be calculated based on the updated trip details.</p>
+        </div>
+        <p>We wish you a pleasant journey.<br>Thank you for choosing UTO.</p>
       `;
       return { subject, html: wrapHtmlEmail("Driver Assigned", htmlBody), text };
     }
