@@ -154,7 +154,7 @@ export async function processDueReminders(now: Date = new Date()): Promise<Remin
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, pickup_at, pickup_date, pickup_time, pickup_address, pickup, dropoff_address, dropoff, vehicle_type, vehicle, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, customer_name, created_at, reminder_emails_sent"
+      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, created_at, reminder_emails_sent"
     )
     .gte("pickup_at", fromIso)
     .lte("pickup_at", toIso)
