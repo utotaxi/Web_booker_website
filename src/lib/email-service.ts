@@ -50,14 +50,14 @@ function customDnsLookup(
 export type EmailType =
   | "booking_confirmation"
   | "booking_updated"
+  | "booking_reminder"
   | "driver_assigned"
   | "driver_on_the_way"
   | "driver_arrived"
   | "trip_started"
   | "trip_completed"
   | "receipt"
-  | "booking_cancelled"
-  | "booking_reminder";
+  | "booking_cancelled";
 
 export interface BookingEmailData {
   bookingReference: string;
@@ -74,11 +74,14 @@ export interface BookingEmailData {
   notes?: string;
   driverName?: string;
   driverPhone?: string;
+  vehicleMake?: string;
   vehicleModel?: string;
+  vehicleColour?: string;
   vehiclePlate?: string;
-  cancellationReason?: string;
-  /** Human-readable window for reminder emails, e.g. "in 48 hours" / "in 30 days". */
+  vehicleRegistration?: string;
+  eta?: string;
   reminderWindow?: string;
+  cancellationReason?: string;
 }
 
 export interface SendEmailOptions {
@@ -153,8 +156,8 @@ async function resolveSmtpIp(host: string): Promise<string> {
  * connect to that IP, and set servername for proper TLS SNI so Gmail's
  * certificate still validates against "smtp.gmail.com".
  */
-export async function getEmailTransporter(forceRefresh = false, portOverride?: number): Promise<nodemailer.Transporter> {
-  if (cachedTransporter && !forceRefresh && cachedResolvedIp && !portOverride) return cachedTransporter;
+export async function getEmailTransporter(forceRefresh = false): Promise<nodemailer.Transporter> {
+  if (cachedTransporter && !forceRefresh && cachedResolvedIp) return cachedTransporter;
 
   const config = getSmtpConfig();
 
@@ -169,14 +172,12 @@ export async function getEmailTransporter(forceRefresh = false, portOverride?: n
   cachedResolvedIp = resolvedIp;
 
   const isGmail = config.host === "smtp.gmail.com" || config.host.includes("gmail");
-  const effectivePort = portOverride ?? config.port;
-  const effectiveSecure = effectivePort === 465; // SSL on 465, STARTTLS on 587
 
   cachedTransporter = nodemailer.createTransport({
     host: resolvedIp, // Use resolved IP to bypass broken container DNS
-    port: effectivePort,
-    secure: effectiveSecure,
-    requireTLS: effectivePort !== 465, // only for STARTTLS (587), not direct SSL (465)
+    port: config.port,
+    secure: config.secure, // false for 587 (STARTTLS)
+    requireTLS: true,
     auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
     tls: {
       // SNI with the real hostname so Gmail's TLS cert matches
@@ -214,6 +215,13 @@ async function verifyDnsResolution(): Promise<{ success: boolean; resolvedIp?: s
  * Verifies SMTP connection configuration and returns detailed status.
  */
 export async function verifySmtpConnection(): Promise<{ success: boolean; message: string; details?: Record<string, unknown> }> {
+  if (process.env.RESEND_API_KEY?.trim()) {
+    return {
+      success: true,
+      message: "Resend HTTP API key is configured. Email dispatch active via Resend.",
+    };
+  }
+
   const config = getSmtpConfig();
   if (!config.pass) {
     return {
@@ -378,8 +386,8 @@ function wrapHtmlEmail(title: string, bodyContent: string): string {
 <body>
   <div class="email-container">
     <div class="email-header">
-      <h1>UTO</h1>
-      <p>Reliable transfers, anytime.</p>
+      <h1>UTO Transfer</h1>
+      <p>Premium Chauffeur & Transfer Services</p>
     </div>
     <div class="email-body">
       ${bodyContent}
@@ -388,7 +396,7 @@ function wrapHtmlEmail(title: string, bodyContent: string): string {
       <p>Thank you for travelling with UTO.</p>
       <p>Kind regards,<br><strong>UTO Customer Support</strong></p>
       <p style="margin-top: 12px; font-size: 11px; color: #9ca3af;">
-        This email was sent to you regarding your booking with UTO.
+        This email was sent to you regarding your booking with UTO Transfer.
       </p>
     </div>
   </div>
@@ -530,7 +538,12 @@ UTO Customer Support`;
     case "driver_assigned": {
       const subject = `Driver Assigned - UTO Transfer (${data.bookingReference})`;
       const driverInfo = data.driverName ? `${data.driverName} (${data.driverPhone || "Contact via App"})` : "Assigned Driver";
-      const vehicleInfo = [data.vehicleModel, data.vehiclePlate].filter(Boolean).join(" - ") || data.vehicleType;
+      // The /api/bookings/assign route sends vehicleRegistration (preferred),
+      // but older callers may still pass vehiclePlate — fall back so the plate
+      // always shows.
+      const plate = data.vehicleRegistration?.trim() || data.vehiclePlate?.trim();
+      const vehicleInfo =
+        [data.vehicleModel, plate].filter(Boolean).join(" - ") || data.vehicleType;
       const text = `Hi ${data.passengerName},\n\nA driver has been assigned to your booking (${data.bookingReference}).\nDriver: ${driverInfo}\nVehicle: ${vehicleInfo}\nPickup Time: ${data.pickupTime} on ${data.pickupDate}.\n\nThank you for choosing UTO.`;
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
@@ -595,118 +608,19 @@ UTO Customer Support`;
     }
 
     case "trip_completed": {
-      const receiptNo = `RC-${data.bookingReference}`;
-      const tripDate = data.pickupDate || "N/A";
-      const reviewLink = "https://g.page/r/CXeCrCQPe8vaEBE/review";
-      const subject = `Your UTO Trip Receipt - ${data.bookingReference}`;
-
-      const text = `Hi ${data.passengerName},
-
-Thank you for travelling with UTO.
-Your journey has been completed successfully. Please find your receipt below.
-
-TRIP RECEIPT
-Receipt No.: ${receiptNo}
-Booking Reference: ${data.bookingReference}
-Trip Date: ${tripDate}
-Payment Status: Paid
-Amount: £${fareDisplay}
-
-Passenger
-Name: ${data.passengerName}
-
-Journey Details
-Pickup Address
-${data.pickupAddress}
-Destination
-${data.dropoffAddress}
-Pickup Time: ${data.pickupTime}
-
-Thank you for choosing UTO.
-
-A quick favour 😊
-If we've made your journey a little easier today, we'd be grateful if you could share your experience with a Google review. Every review helps a local business like ours grow and continue providing great service.
-
-Rate your experience
-Your feedback helps us improve our service and supports our drivers. ⭐⭐⭐⭐⭐
-Leave a review here: ⭐ ${reviewLink}
-
-Thank you for your support – it truly means a lot!
-
-Kind Regards, UTO`;
-
+      const subject = `Trip Completed - UTO Transfer (${data.bookingReference})`;
+      const text = `Hi ${data.passengerName},\n\nYour trip (${data.bookingReference}) has been completed.\nThank you for travelling with UTO. We hope you had a pleasant journey!`;
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
-        <p>Thank you for travelling with UTO.<br>Your journey has been completed successfully. Please find your receipt below.</p>
-
+        <p>Thank you for travelling with UTO. Your trip has been completed successfully.</p>
         <div class="details-box">
-          <div class="details-title">TRIP RECEIPT</div>
-
-          <div class="detail-row">
-            <div class="detail-label">Receipt No.</div>
-            <div class="detail-value">${receiptNo}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Booking Reference</div>
-            <div class="detail-value" style="font-weight: 700; color: #2563eb;">${data.bookingReference}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Trip Date</div>
-            <div class="detail-value">${tripDate}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Payment Status</div>
-            <div class="detail-value" style="color: #16a34a; font-weight: 600;">Paid</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Amount</div>
-            <div class="detail-value" style="font-weight: 700;">£${fareDisplay}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Passenger Name</div>
-            <div class="detail-value">${data.passengerName}</div>
-          </div>
+          <div class="details-title">Trip Summary</div>
+          <div class="detail-row"><div class="detail-label">Booking Reference</div><div class="detail-value">${data.bookingReference}</div></div>
+          <div class="detail-row"><div class="detail-label">Total Fare</div><div class="detail-value">£${fareDisplay}</div></div>
+          <div class="detail-row"><div class="detail-label">Payment Method</div><div class="detail-value">${data.paymentMethod}</div></div>
         </div>
-
-        <div class="details-box">
-          <div class="details-title">Journey Details</div>
-          <div class="detail-row">
-            <div class="detail-label">Pickup Address</div>
-            <div class="detail-value">${data.pickupAddress}</div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Destination</div>
-            <div class="detail-value">${data.dropoffAddress}</div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Pickup Time</div>
-            <div class="detail-value">${data.pickupTime}</div>
-          </div>
-        </div>
-
-        <p style="margin-top: 8px;">Thank you for choosing UTO.</p>
-
-        <div class="policy-box" style="background-color: #eff6ff; border-left: 4px solid #3b82f6; color: #1e40af;">
-          <div class="policy-title" style="color: #1e3a8a;">A quick favour 😊</div>
-          <p style="margin: 0 0 8px 0;">If we've made your journey a little easier today, we'd be grateful if you could share your experience with a Google review. Every review helps a local business like ours grow and continue providing great service.</p>
-          <p style="margin: 0 0 8px 0;"><strong>Rate your experience</strong><br>Your feedback helps us improve our service and supports our drivers. ⭐⭐⭐⭐⭐</p>
-          <p style="margin: 0;">Leave a review here: ⭐ <a href="${reviewLink}" style="color: #2563eb;">${reviewLink}</a></p>
-        </div>
-
-        <p>Thank you for your support – it truly means a lot!</p>
-
-        <p style="margin-top: 16px;">
-          Kind Regards,<br>
-          <strong>UTO</strong>
-        </p>
       `;
-
-      return { subject, html: wrapHtmlEmail("Your UTO Trip Receipt", htmlBody), text };
+      return { subject, html: wrapHtmlEmail("Trip Completed", htmlBody), text };
     }
 
     case "receipt": {
@@ -745,133 +659,44 @@ Kind Regards, UTO`;
 
     case "booking_reminder": {
       const windowLabel = data.reminderWindow?.trim() || "soon";
-      const subject = `UTO Journey Reminder ${windowLabel} - (${data.bookingReference})`;
-
-      // Plain-text body matches the client-specified reminder copy verbatim.
-      const text = `Hi ${data.passengerName},
-
-This is a friendly reminder that you have an upcoming journey booked with UTO.
-
-Booking Details
-Booking Reference: ${data.bookingReference}
-Pickup Date: ${data.pickupDate}
-Pickup Time: ${data.pickupTime}
-Pickup Address:
-${data.pickupAddress}
-Destination:
-${data.dropoffAddress}
-Vehicle Type: ${data.vehicleType}
-Passengers: ${data.passengers}
-Estimated Fare: £${fareDisplay}
-Payment Method: ${data.paymentMethod}
-
-Need to make changes?
-If you need to update your booking or cancel your journey, please do so as soon as possible by replying on this email.
-Free cancellation is available up to 3 hours before your scheduled pickup time. If your booking is cancelled at least 3 hours in advance, you will receive a full refund (where applicable). Cancellations made less than 3 hours before pickup may be subject to full cancellation charges.
-
-Journey Information
-If you would like to make any changes to your journey (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.
-Any changes are subject to the driver's agreement and may incur additional charges.
-
-If you have any questions or require assistance, please don't hesitate to contact us.
-
-Thank you for choosing UTO. We look forward to taking you to your destination safely and comfortably.
-
-Kind regards,
-UTO Customer Support
-📞 07596266901
-🌐 www.utotransfer.co.uk`;
-
+      const subject = `Reminder: Your UTO Transfer ${windowLabel} (${data.bookingReference})`;
+      const text = `Hi ${data.passengerName},\n\nThis is a reminder for your upcoming booking (${data.bookingReference}) scheduled ${windowLabel}.\nPickup: ${data.pickupDate} at ${data.pickupTime}\nFrom: ${data.pickupAddress}\nTo: ${data.dropoffAddress}\nVehicle: ${data.vehicleType}\nEstimated Fare: £${fareDisplay}\nPayment Method: ${data.paymentMethod}\n\nThank you for choosing UTO Transfer.`;
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
-        <p>This is a friendly reminder that you have an upcoming journey booked with UTO.</p>
-
+        <p>This is a friendly reminder for your upcoming booking scheduled <strong>${windowLabel}</strong>.</p>
         <div class="details-box">
-          <div class="details-title">Booking Details</div>
-
-          <div class="detail-row">
-            <div class="detail-label">Booking Reference</div>
-            <div class="detail-value" style="font-weight: 700; color: #2563eb;">${data.bookingReference}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Pickup Date</div>
-            <div class="detail-value">${data.pickupDate}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Pickup Time</div>
-            <div class="detail-value">${data.pickupTime}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Pickup Address</div>
-            <div class="detail-value">${data.pickupAddress}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Destination</div>
-            <div class="detail-value">${data.dropoffAddress}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Vehicle Type</div>
-            <div class="detail-value">${data.vehicleType}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Passengers</div>
-            <div class="detail-value">${data.passengers}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Estimated Fare</div>
-            <div class="detail-value" style="font-weight: 700;">£${fareDisplay}</div>
-          </div>
-
-          <div class="detail-row">
-            <div class="detail-label">Payment Method</div>
-            <div class="detail-value">${data.paymentMethod}</div>
-          </div>
+          <div class="details-title">Booking Reminder</div>
+          <div class="detail-row"><div class="detail-label">Booking Reference</div><div class="detail-value">${data.bookingReference}</div></div>
+          <div class="detail-row"><div class="detail-label">Pickup Date & Time</div><div class="detail-value">${data.pickupDate} at ${data.pickupTime}</div></div>
+          <div class="detail-row"><div class="detail-label">Pickup Address</div><div class="detail-value">${data.pickupAddress}</div></div>
+          <div class="detail-row"><div class="detail-label">Destination</div><div class="detail-value">${data.dropoffAddress}</div></div>
+          <div class="detail-row"><div class="detail-label">Vehicle Type</div><div class="detail-value">${data.vehicleType}</div></div>
+          <div class="detail-row"><div class="detail-label">Estimated Fare</div><div class="detail-value">£${fareDisplay}</div></div>
+          <div class="detail-row"><div class="detail-label">Payment Method</div><div class="detail-value">${data.paymentMethod}</div></div>
         </div>
-
-        <div class="policy-box">
-          <div class="policy-title">Need to make changes?</div>
-          <p style="margin: 0 0 8px 0;">If you need to update your booking or cancel your journey, please do so as soon as possible by replying on this email.</p>
-          <p style="margin: 0 0 8px 0;">Free cancellation is available up to 3 hours before your scheduled pickup time. If your booking is cancelled at least 3 hours in advance, you will receive a full refund (where applicable). Cancellations made less than 3 hours before pickup may be subject to full cancellation charges.</p>
-        </div>
-
-        <div class="details-box" style="border-left: 4px solid #3b82f6;">
-          <div class="policy-title" style="color: #1e3a8a;">Journey Information</div>
-          <p style="margin: 0 0 8px 0;">If you would like to make any changes to your journey (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.</p>
-          <p style="margin: 0;">Any changes are subject to the driver's agreement and may incur additional charges.</p>
-        </div>
-
-        <p>If you have any questions or require assistance, please don't hesitate to contact us.</p>
-        <p>Thank you for choosing UTO. We look forward to taking you to your destination safely and comfortably.</p>
-
-        <p style="margin-top: 16px;">
-          Kind regards,<br>
-          <strong>UTO Customer Support</strong><br>
-          📞 07596266901<br>
-          🌐 <a href="https://www.utotransfer.co.uk" style="color: #2563eb;">www.utotransfer.co.uk</a>
-        </p>
+        <p>We look forward to seeing you. If you need to make changes, please contact UTO support.</p>
       `;
+      return { subject, html: wrapHtmlEmail("Booking Reminder", htmlBody), text };
+    }
 
-      return { subject, html: wrapHtmlEmail("UTO Journey Reminder", htmlBody), text };
+    default: {
+      // Exhaustiveness guard: if a new EmailType is added without a matching
+      // case here, this throws a clear error instead of returning undefined and
+      // crashing the caller's destructuring silently.
+      const exhaustive: never = type;
+      throw new Error(`[Email Service] Unsupported email type: ${exhaustive}`);
     }
   }
 }
 
 /**
  * Sends automated booking email with full error handling and logging.
- * Uses Nodemailer SMTP via Gmail (App Password auth) as the sole transport.
+ * Prefers Resend HTTP API if RESEND_API_KEY is present (recommended on Railway),
+ * falling back to Nodemailer SMTP via Gmail.
  *
- * - Gmail SMTP requires an App Password (not your regular password).
- * - Generate one at: https://myaccount.google.com/apppasswords
- * - Set it as SMTP_PASS or GMAIL_APP_PASSWORD in your environment variables.
- * - NOTE: Railway/Vercel block outbound SMTP ports 587/465. This path
- *   requires a host that allows outbound SMTP.
+ * IMPORTANT: Gmail SMTP requires an App Password (not your regular password).
+ * Generate one at: https://myaccount.google.com/apppasswords
+ * Set it as SMTP_PASS or GMAIL_APP_PASSWORD in your environment variables.
  */
 export async function sendBookingEmail(options: SendEmailOptions): Promise<SendEmailResult> {
   const config = getSmtpConfig();
@@ -888,9 +713,40 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   console.log(`[Email Dispatch] Preparing to send "${options.type}" email to ${targetEmail}`);
   console.log(`[Email Dispatch] SMTP config: host=${config.host}, port=${config.port}, user=${config.user}, from="${config.fromName}" <${config.fromEmail}>`);
 
-  // SMTP / Nodemailer dispatch via Gmail.
-  // Try port 587 (STARTTLS) first, fall back to port 465 (SSL).
-  // Requires a host that allows outbound SMTP (Railway/Vercel block these ports).
+  // // 1. HTTP API dispatch via Resend (Bypasses cloud firewall SMTP port blocks on Railway/Vercel)
+  // const resendApiKey = process.env.RESEND_API_KEY?.trim();
+  // if (resendApiKey) {
+  //   try {
+  //     const resend = new Resend(resendApiKey);
+  //     const fromAddress = process.env.RESEND_FROM_EMAIL?.trim() || `"${config.fromName}" <onboarding@resend.dev>`;
+  //     const resendResult = await resend.emails.send({
+  //       from: fromAddress,
+  //       to: targetEmail,
+  //       replyTo: config.replyTo,
+  //       subject,
+  //       html,
+  //       text,
+  //     });
+
+  //     if (resendResult.error) {
+  //       console.error("[Resend Error]", resendResult.error);
+  //       throw new Error(resendResult.error.message);
+  //     }
+
+  //     console.log(`[Resend Success] Email sent successfully (${options.type}) to ${targetEmail}. ID: ${resendResult.data?.id}`);
+  //     return {
+  //       success: true,
+  //       messageId: resendResult.data?.id,
+  //       details: { provider: "resend", data: resendResult.data },
+  //     };
+  //   } catch (resendErr) {
+  //     console.warn("[Resend Fallback] Resend HTTP API failed, falling back to Nodemailer SMTP:", (resendErr as Error).message);
+  //   }
+  // }
+
+  // 2. SMTP / Nodemailer dispatch via Gmail
+  // Try port 587 (STARTTLS) first, fall back to port 465 (SSL) on timeout/refused.
+  // Railway blocks outbound SMTP ports, so this may still fail — see Resend option above.
   const portsToTry = config.port === 587 ? [587, 465] : [config.port, 587, 465];
 
   const mailOptions: nodemailer.SendMailOptions = {
@@ -905,12 +761,13 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
   let lastError: Error & { code?: string; command?: string; responseCode?: number; response?: string } | null = null;
 
   for (const tryPort of portsToTry) {
+    const isSecure = tryPort === 465;
     try {
       // Force-fresh transporter per port attempt
       cachedTransporter = null;
       cachedResolvedIp = null;
-      const transporter = await getEmailTransporter(true, tryPort);
-      console.log(`[SMTP Sending] Trying ${config.host}:${tryPort}...`);
+      const transporter = await getEmailTransporter(true);
+      console.log(`[SMTP Sending] Trying ${config.host}:${tryPort} (secure=${isSecure})...`);
       const info = await transporter.sendMail(mailOptions);
 
       console.log(`[SMTP Success] Email sent successfully (${options.type}) to ${targetEmail}. Message ID: ${info.messageId}`);
@@ -918,55 +775,56 @@ export async function sendBookingEmail(options: SendEmailOptions): Promise<SendE
       return {
         success: true,
         messageId: info.messageId,
-        details: { provider: "smtp", port: tryPort, response: info.response, envelope: info.envelope },
+        details: { provider: "smtp", response: info.response, envelope: info.envelope },
       };
     } catch (error) {
+      // Invalidate cached transporter on error so the next port attempt creates
+      // a fresh connection. Don't return here — fall through to the next port
+      // so the 465 (SSL) fallback actually runs.
       cachedTransporter = null;
       cachedResolvedIp = null;
-      const err = error as Error & { code?: string; command?: string; responseCode?: number; response?: string };
-      console.warn(`[SMTP Port ${tryPort}] Failed: ${err.message} (Code: ${err.code || "N/A"})`);
-      lastError = err;
-      // Continue to next port
+      lastError = error as Error & { code?: string; command?: string; responseCode?: number; response?: string };
+      console.warn(
+        `[SMTP Error] ${config.host}:${tryPort} failed for ${options.type} to ${targetEmail}: ${lastError.code || "UNKNOWN"} ${lastError.message}`
+      );
     }
   }
 
-  // All ports failed — build detailed error
-  {
-    const err = lastError!;
-    const logDetails = {
-      type: options.type,
-      recipient: targetEmail,
-      subject,
-      host: config.host,
-      portsTried: portsToTry,
-      user: config.user,
-      errorCode: err.code || "UNKNOWN",
-      errorMessage: err.message,
-      command: err.command || "N/A",
-      responseCode: err.responseCode || "N/A",
-      smtpResponse: err.response || "N/A",
-    };
+  // All ports failed (or none were configured). Build a single actionable error.
+  const err: Error & { code?: string; command?: string; responseCode?: number; response?: string } =
+    lastError ?? new Error("No SMTP ports were configured to try.");
+  const logDetails = {
+    type: options.type,
+    recipient: targetEmail,
+    subject,
+    host: config.host,
+    portsTried: portsToTry,
+    user: config.user,
+    errorCode: err.code || "UNKNOWN",
+    errorMessage: err.message,
+    command: err.command || "N/A",
+    responseCode: err.responseCode || "N/A",
+    smtpResponse: err.response || "N/A",
+  };
 
-    console.error(`[SMTP Error] All ports failed to send ${options.type} email to ${targetEmail}`, logDetails);
+  console.error(`[SMTP Error] All ports failed to send ${options.type} email to ${targetEmail}`, logDetails);
 
-    let actionableHint = "";
-    if (err.code === "EAUTH" || err.message?.includes("Invalid login") || err.message?.includes("535")) {
-      actionableHint = " Gmail authentication failed. Verify your App Password is correct and 2FA is enabled. Generate a new App Password at https://myaccount.google.com/apppasswords";
-    } else if (err.code === "ESOCKET" || err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
-      actionableHint = ` Cannot reach SMTP server on any port. Check network/firewall allows outbound SMTP.`;
-    } else if (err.code === "ECONNRESET" || err.code === "ETIMEDOUT" || err.message?.includes("timeout")) {
-      actionableHint = " All SMTP ports blocked or timed out. Verify the production host allows outbound SMTP (ports 587/465); cloud hosts like Railway/Vercel block these ports.";
-    } else if (err.message?.includes("certificate") || err.message?.includes("TLS")) {
-      actionableHint = " TLS/certificate error. The SMTP server's certificate could not be verified.";
-    }
-
-    const fullError = `Failed to send email via all SMTP ports (${portsToTry.join(",")}): ${err.message}${actionableHint}`;
-
-    return {
-      success: false,
-      error: fullError,
-      details: logDetails,
-    };
+  let actionableHint = "";
+  if (err.code === "EAUTH" || err.message?.includes("Invalid login") || err.message?.includes("535")) {
+    actionableHint = " Gmail authentication failed. Verify your App Password is correct and 2FA is enabled. Generate a new App Password at https://myaccount.google.com/apppasswords";
+  } else if (err.code === "ESOCKET" || err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
+    actionableHint = ` Cannot reach ${config.host}. Check network/firewall allows outbound SMTP (ports 587/465).`;
+  } else if (err.code === "ECONNRESET" || err.message?.includes("timeout")) {
+    actionableHint = " Connection was reset or timed out. The SMTP server may be unreachable from this environment.";
+  } else if (err.message?.includes("certificate") || err.message?.includes("TLS")) {
+    actionableHint = " TLS/certificate error. The SMTP server's certificate could not be verified.";
   }
+
+  const fullError = `Failed to send email via SMTP ports (${portsToTry.join(", ")}): ${err.message}${actionableHint}`;
+
+  return {
+    success: false,
+    error: fullError,
+    details: logDetails,
+  };
 }
-

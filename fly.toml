@@ -12,7 +12,7 @@ primary_region = 'lhr'
     NEXT_PUBLIC_GOOGLE_MAPS_API_KEY = "AIzaSyAkB-0o6vqtRtY2QG-YNPMQkPhu9smcHLc"
     NEXT_PUBLIC_SUPABASE_URL = "https://tadqvfnqykmjdxzpoczp.supabase.co"
     NEXT_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhZHF2Zm5xeWttamR4enBvY3pwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NDQyNTEsImV4cCI6MjA4ODEyMDI1MX0.0Fhl0RuTFk-qtPQ5Au7iZrk9mnE8Gieth7PWdc12rxo"
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = ""
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_live_51TER5DH84iWPEJxiL69ex2yw4e4yESIU0feOh1s5sb6zIKyxQh7UmoPdQTGmoTxLzhvJflPyb5yzQIhtwnjtvM9K00BOHZemUe"
 
 [http_service]
   internal_port = 3000

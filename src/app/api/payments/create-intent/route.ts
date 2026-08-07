@@ -48,10 +48,18 @@ function normalizeLuggage(value: number | undefined): number {
 }
 
 export async function POST(req: NextRequest) {
-  // If Stripe is not configured, signal the client to skip payment so local
-  // development (without keys) still works end to end.
+  // Payment is mandatory for chargeable fares. If Stripe is not configured we
+  // fail loudly rather than silently letting the booking through unpaid — a
+  // missing key must never allow a paid trip to be booked for free.
   if (!isStripeConfigured()) {
-    return NextResponse.json({ configured: false });
+    return NextResponse.json(
+      {
+        configured: false,
+        error:
+          "Payments are not configured on the server. Set STRIPE_SECRET_KEY before accepting bookings.",
+      },
+      { status: 503 }
+    );
   }
 
   let payload: IntentPayload;

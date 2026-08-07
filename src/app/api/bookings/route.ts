@@ -250,7 +250,25 @@ export async function POST(req: NextRequest) {
     const expectedPence = Math.round(chargeableFare * 100);
     const couponCoversFullFare = Boolean(appliedCoupon) && expectedPence < 30;
 
-    if (isStripeConfigured() && !couponCoversFullFare) {
+    if (couponCoversFullFare) {
+      // Fully discounted fare: no card payment required.
+      paymentInfo = {
+        payment_intent_id: "coupon",
+        payment_status: "succeeded",
+        amount_paid: 0,
+      };
+    } else if (!isStripeConfigured()) {
+      // Chargeable fare but no way to take payment. Fail loudly rather than
+      // silently recording an unpaid booking — a missing key must never let a
+      // paid trip through unnoticed.
+      return NextResponse.json(
+        {
+          error:
+            "Payments are not configured on the server. Set STRIPE_SECRET_KEY before accepting bookings.",
+        },
+        { status: 503 }
+      );
+    } else {
       if (!payload.payment_intent_id?.trim()) {
         return NextResponse.json(
           { error: "Payment is required before booking. Please complete payment." },
@@ -286,12 +304,6 @@ export async function POST(req: NextRequest) {
         payment_intent_id: intent.id,
         payment_status: intent.status,
         amount_paid: paidPence / 100,
-      };
-    } else if (couponCoversFullFare) {
-      paymentInfo = {
-        payment_intent_id: "coupon",
-        payment_status: "succeeded",
-        amount_paid: 0,
       };
     }
 

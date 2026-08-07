@@ -654,13 +654,9 @@ export default function WebBooker() {
       const data = await response.json();
 
       if (!response.ok) {
+        // A 503 here means payments are not configured on the server. Surface
+        // the message instead of silently booking an unpaid ride.
         setSaveError(data.error || "Could not start payment. Please try again.");
-        return;
-      }
-
-      // Stripe not set up on the server: fall back to booking without payment.
-      if (data.configured === false) {
-        await submitBooking(null);
         return;
       }
 
