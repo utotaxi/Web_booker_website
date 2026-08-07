@@ -489,6 +489,33 @@ export async function POST(req: NextRequest) {
           },
         });
         console.log("[Booking Route] Email result:", emailResult);
+
+        // Record the confirmation marker so the confirmation cron notifier
+        // (which catches app-created bookings) doesn't re-send web bookings.
+        if (emailResult.success && data?.id) {
+          try {
+            const { data: cur } = await supabase
+              .from(BOOKINGS_TABLE)
+              .select("reminder_emails_sent")
+              .eq("id", data.id)
+              .maybeSingle();
+            const existing = Array.isArray(cur?.reminder_emails_sent)
+              ? (cur!.reminder_emails_sent as string[])
+              : [];
+            if (!existing.includes("booking_confirmation")) {
+              await supabase
+                .from(BOOKINGS_TABLE)
+                .update({
+                  reminder_emails_sent: Array.from(
+                    new Set([...existing, "booking_confirmation"])
+                  ),
+                })
+                .eq("id", data.id);
+            }
+          } catch (markErr) {
+            console.warn("[Booking Route] Failed to record confirmation marker:", (markErr as Error).message);
+          }
+        }
       } catch (emailErr) {
         console.error("[Booking Route] Failed to send confirmation email:", emailErr);
       }
