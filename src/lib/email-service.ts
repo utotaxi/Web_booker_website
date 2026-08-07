@@ -118,6 +118,40 @@ export interface SendEmailResult {
  */
 const UTO_SUPPORT_PHONE = process.env.UTO_SUPPORT_PHONE?.trim() || "07596266901";
 const UTO_WEBSITE = process.env.UTO_WEBSITE?.trim() || "www.utotransfer.co.uk";
+const UTO_REVIEW_LINK =
+  process.env.UTO_REVIEW_LINK?.trim() || "https://g.page/r/CXeCrCQPe8vaEBE/review";
+
+/**
+ * Builds the "leave us a Google review" block (HTML + plain text) reused by
+ * the trip-completed and receipt emails.
+ */
+function buildReviewBlock(): { html: string; text: string } {
+  const stars = "⭐⭐⭐⭐⭐";
+  const text = `A quick favour 😊
+If we've made your journey a little easier today, we'd be grateful if you could share your experience with a Google review. Every review helps a local business like ours grow and continue providing great service.
+
+Rate your experience
+Your feedback helps us improve our service and supports our drivers.
+${stars}
+Leave a review here:
+⭐ ${UTO_REVIEW_LINK}
+
+Thank you for your support – it truly means a lot!
+Kind Regards, UTO`;
+  const html = `
+        <div class="policy-box" style="background-color:#fffbeb;border-left-color:#f59e0b;color:#78350f;">
+          <div class="policy-title" style="color:#92400e;">A quick favour 😊</div>
+          <p style="margin:0 0 12px 0;">If we've made your journey a little easier today, we'd be grateful if you could share your experience with a Google review. Every review helps a local business like ours grow and continue providing great service.</p>
+          <p style="margin:0 0 4px 0;font-weight:700;color:#92400e;">Rate your experience</p>
+          <p style="margin:0 0 8px 0;">Your feedback helps us improve our service and supports our drivers.</p>
+          <p style="margin:0 0 8px 0;font-size:20px;letter-spacing:2px;">${stars}</p>
+          <p style="margin:0 0 8px 0;">Leave a review here:</p>
+          <p style="margin:0 0 12px 0;"><a href="${UTO_REVIEW_LINK}" style="display:inline-block;background-color:#f59e0b;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:700;">⭐ Leave a Google Review</a></p>
+          <p style="margin:0;">Thank you for your support – it truly means a lot!</p>
+        </div>
+        <p>Kind Regards,<br><strong>UTO</strong></p>`;
+  return { html, text };
+}
 
 /**
  * Retrieves SMTP configuration from environment variables with defaults matching client spec.
@@ -664,24 +698,35 @@ Thank you for choosing UTO.`;
     }
 
     case "trip_completed": {
-      const subject = `Trip Completed - UTO Transfer (${data.bookingReference})`;
-      const text = `Hi ${data.passengerName},\n\nYour trip (${data.bookingReference}) has been completed.\nThank you for travelling with UTO. We hope you had a pleasant journey!`;
+      const subject = `Trip Completed - UTO (${data.bookingReference})`;
+      const review = buildReviewBlock();
+      const text = `Hi ${data.passengerName},
+
+Your trip (${data.bookingReference}) has been completed. Thank you for travelling with UTO!
+
+${review.text}`;
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
-        <p>Thank you for travelling with UTO. Your trip has been completed successfully.</p>
-        <div class="details-box">
-          <div class="details-title">Trip Summary</div>
-          <div class="detail-row"><div class="detail-label">Booking Reference</div><div class="detail-value">${data.bookingReference}</div></div>
-          <div class="detail-row"><div class="detail-label">Total Fare</div><div class="detail-value">£${fareDisplay}</div></div>
-          <div class="detail-row"><div class="detail-label">Payment Method</div><div class="detail-value">${data.paymentMethod}</div></div>
-        </div>
+        <p>Your trip (<strong>${data.bookingReference}</strong>) has been completed. Thank you for travelling with UTO!</p>
+        ${review.html}
       `;
       return { subject, html: wrapHtmlEmail("Trip Completed", htmlBody), text };
     }
 
     case "receipt": {
-      const subject = `Payment Receipt - UTO Transfer (${data.bookingReference})`;
-      const text = `Hi ${data.passengerName},\n\nHere is your receipt for booking ${data.bookingReference}.\nAmount Paid: £${fareDisplay}\nPayment Method: ${data.paymentMethod}\n\nThank you for choosing UTO.`;
+      const subject = `Payment Receipt - UTO (${data.bookingReference})`;
+      const review = buildReviewBlock();
+      const text = `Hi ${data.passengerName},
+
+Thank you for your payment. Here is your official receipt.
+
+Payment Receipt
+Booking Reference: ${data.bookingReference}
+Amount Paid: £${fareDisplay}
+Payment Method: ${data.paymentMethod}
+Date: ${data.pickupDate}
+
+${review.text}`;
       const htmlBody = `
         <p>Hi ${data.passengerName},</p>
         <p>Thank you for your payment. Here is your official receipt.</p>
@@ -692,8 +737,9 @@ Thank you for choosing UTO.`;
           <div class="detail-row"><div class="detail-label">Payment Method</div><div class="detail-value">${data.paymentMethod}</div></div>
           <div class="detail-row"><div class="detail-label">Date</div><div class="detail-value">${data.pickupDate}</div></div>
         </div>
+        ${review.html}
       `;
-      return { subject, html: wrapHtmlEmail("Receipt - UTO Transfer", htmlBody), text };
+      return { subject, html: wrapHtmlEmail("Receipt - UTO", htmlBody), text };
     }
 
     case "booking_cancelled": {

@@ -227,6 +227,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Record a dedupe marker so the completion cron notifier doesn't re-send.
+  try {
+    const { data: cur } = await supabase
+      .from(BOOKINGS_TABLE)
+      .select("reminder_emails_sent")
+      .eq("id", row.id)
+      .maybeSingle();
+    const existing = Array.isArray(cur?.reminder_emails_sent)
+      ? (cur!.reminder_emails_sent as string[])
+      : [];
+    if (!existing.includes("trip_completed")) {
+      await supabase
+        .from(BOOKINGS_TABLE)
+        .update({ reminder_emails_sent: Array.from(new Set([...existing, "trip_completed"])) })
+        .eq("id", row.id);
+    }
+  } catch (markErr) {
+    console.warn(`[Bookings Complete] Failed to record trip_completed marker for ${bookingReference}:`, (markErr as Error).message);
+  }
+
   return NextResponse.json(
     {
       success: true,

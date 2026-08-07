@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processDueReminders } from "@/lib/booking-reminders";
 import { processDriverReminders } from "@/lib/driver-reminder-notifier";
+import { processCompletedTrips } from "@/lib/completion-notifier";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,17 +17,21 @@ export const dynamic = "force-dynamic";
  *   1. Passenger reminders — per booking, windows 180d/60d/30d/48h/24h/12h/6h/4h.
  *   2. Driver reminders — one email per driver listing ALL their accepted
  *      upcoming bookings, windows 48h/24h/12h/6h/4h.
+ *   3. Trip completions — sends the trip-completed/receipt/review email to
+ *      riders whose booking was just marked completed.
  *
- * Both are idempotent — sent windows are recorded in each booking's
+ * All are idempotent — sent windows are recorded in each booking's
  * `reminder_emails_sent` jsonb column (`<window>` for passengers,
- * `driver_reminder:<window>` for the driver) so nothing is ever sent twice.
+ * `driver_reminder:<window>` for the driver, `trip_completed` for
+ * completions) so nothing is ever sent twice.
  */
 async function runReminders() {
   const startedAt = new Date().toISOString();
   try {
-    const [passengers, drivers] = await Promise.all([
+    const [passengers, drivers, completions] = await Promise.all([
       processDueReminders(),
       processDriverReminders(),
+      processCompletedTrips(),
     ]);
     return {
       startedAt,
@@ -46,6 +51,14 @@ async function runReminders() {
         failedCount: drivers.failed.length,
         sent: drivers.sent,
         failed: drivers.failed,
+      },
+      completions: {
+        scanned: completions.scanned,
+        skipped: completions.skipped,
+        sentCount: completions.sent.length,
+        failedCount: completions.failed.length,
+        sent: completions.sent,
+        failed: completions.failed,
       },
     };
   } catch (err) {
