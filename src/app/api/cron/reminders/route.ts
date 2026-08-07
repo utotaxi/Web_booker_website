@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processDueReminders } from "@/lib/booking-reminders";
+import { processDriverReminders } from "@/lib/driver-reminder-notifier";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,27 +10,43 @@ export const dynamic = "force-dynamic";
  *
  * Schedule an external job (cron-job.org / GitHub Actions / Fly cron) to hit:
  *   GET/POST https://<your-domain>/api/cron/reminders
- * every 15-30 minutes with header `x-cron-secret: <CRON_SECRET>`.
+ * every 5 minutes with header `x-cron-secret: <CRON_SECRET>`.
  *
- * Reminder windows (before pickup):
- *   180 days, 60 days, 30 days, 48 hours, 24 hours, 12 hours, 6 hours, 4 hours.
+ * Two jobs run per call:
+ *   1. Passenger reminders — per booking, windows 180d/60d/30d/48h/24h/12h/6h/4h.
+ *   2. Driver reminders — one email per driver listing ALL their accepted
+ *      upcoming bookings, windows 48h/24h/12h/6h/4h.
  *
- * The job is idempotent — each window is recorded in the booking's
- * `reminder_emails_sent` jsonb column so it is never sent twice.
+ * Both are idempotent — sent windows are recorded in each booking's
+ * `reminder_emails_sent` jsonb column (`<window>` for passengers,
+ * `driver_reminder:<window>` for the driver) so nothing is ever sent twice.
  */
 async function runReminders() {
   const startedAt = new Date().toISOString();
   try {
-    const outcome = await processDueReminders();
+    const [passengers, drivers] = await Promise.all([
+      processDueReminders(),
+      processDriverReminders(),
+    ]);
     return {
       startedAt,
       finishedAt: new Date().toISOString(),
-      scanned: outcome.scanned,
-      skipped: outcome.skipped,
-      sentCount: outcome.sent.length,
-      failedCount: outcome.failed.length,
-      sent: outcome.sent,
-      failed: outcome.failed,
+      passengers: {
+        scanned: passengers.scanned,
+        skipped: passengers.skipped,
+        sentCount: passengers.sent.length,
+        failedCount: passengers.failed.length,
+        sent: passengers.sent,
+        failed: passengers.failed,
+      },
+      drivers: {
+        scanned: drivers.scanned,
+        skipped: drivers.skipped,
+        sentCount: drivers.sent.length,
+        failedCount: drivers.failed.length,
+        sent: drivers.sent,
+        failed: drivers.failed,
+      },
     };
   } catch (err) {
     return {

@@ -57,7 +57,20 @@ export type EmailType =
   | "trip_started"
   | "trip_completed"
   | "receipt"
-  | "booking_cancelled";
+  | "booking_cancelled"
+  | "driver_reminder";
+
+export interface DriverBookingItem {
+  bookingReference: string;
+  passengerName: string;
+  pickupDate: string; // DD/MM/YYYY
+  pickupTime: string; // HH:MM (24h)
+  pickupAddress: string;
+  dropoffAddress: string;
+  vehicleType: string;
+  estimatedFare: string;
+  notes?: string;
+}
 
 export interface BookingEmailData {
   bookingReference: string;
@@ -82,6 +95,8 @@ export interface BookingEmailData {
   eta?: string;
   reminderWindow?: string;
   cancellationReason?: string;
+  /** All of the driver's accepted upcoming bookings — used by driver_reminder. */
+  driverUpcomingBookings?: DriverBookingItem[];
 }
 
 export interface SendEmailOptions {
@@ -102,6 +117,7 @@ export interface SendEmailResult {
  * deploy time via UTO_SUPPORT_PHONE if the number ever changes.
  */
 const UTO_SUPPORT_PHONE = process.env.UTO_SUPPORT_PHONE?.trim() || "07596266901";
+const UTO_WEBSITE = process.env.UTO_WEBSITE?.trim() || "www.utotransfer.co.uk";
 
 /**
  * Retrieves SMTP configuration from environment variables with defaults matching client spec.
@@ -392,8 +408,8 @@ function wrapHtmlEmail(title: string, bodyContent: string): string {
 <body>
   <div class="email-container">
     <div class="email-header">
-      <h1>UTO Transfer</h1>
-      <p>Premium Chauffeur & Transfer Services</p>
+      <h1>UTO</h1>
+      <p>Reliable transfers, anytime.</p>
     </div>
     <div class="email-body">
       ${bodyContent}
@@ -402,7 +418,7 @@ function wrapHtmlEmail(title: string, bodyContent: string): string {
       <p>Thank you for travelling with UTO.</p>
       <p>Kind regards,<br><strong>UTO Customer Support</strong></p>
       <p style="margin-top: 12px; font-size: 11px; color: #9ca3af;">
-        This email was sent to you regarding your booking with UTO Transfer.
+        This email was sent to you regarding your booking with UTO.
       </p>
     </div>
   </div>
@@ -551,7 +567,6 @@ UTO Customer Support`;
       const registration =
         data.vehicleRegistration?.trim() || data.vehiclePlate?.trim() || "";
       const driverPhone = data.driverPhone?.trim() || "";
-      const eta = data.eta?.trim() || "";
       const vehicleLine = [vehicleMake, vehicleModel].filter(Boolean).join(" ") || data.vehicleType;
 
       const text = `Hi ${data.passengerName},
@@ -560,7 +575,8 @@ Good news! Your driver has now been assigned.
 
 Driver Details
 Driver Name: ${driverName}
-Vehicle: ${vehicleLine}${vehicleColour ? `\nVehicle Colour: ${vehicleColour}` : ""}${registration ? `\nRegistration: ${registration}` : ""}${driverPhone ? `\nDriver Phone: ${driverPhone}` : ""}${eta ? `\nEstimated Arrival Time: ${eta}` : ""}
+Vehicle: ${vehicleLine}${vehicleColour ? `\nVehicle Colour: ${vehicleColour}` : ""}${registration ? `\nRegistration: ${registration}` : ""}${driverPhone ? `\nDriver Phone: ${driverPhone}` : ""}
+Pickup Time: ${data.pickupDate} at ${data.pickupTime}
 Pickup Address: ${data.pickupAddress}
 Destination: ${data.dropoffAddress}
 
@@ -584,7 +600,7 @@ Thank you for choosing UTO.`;
           ${vehicleColour ? `<div class="detail-row"><div class="detail-label">Vehicle Colour</div><div class="detail-value">${vehicleColour}</div></div>` : ""}
           ${registration ? `<div class="detail-row"><div class="detail-label">Registration</div><div class="detail-value">${registration}</div></div>` : ""}
           ${driverPhone ? `<div class="detail-row"><div class="detail-label">Driver Phone</div><div class="detail-value">${driverPhone}</div></div>` : ""}
-          ${eta ? `<div class="detail-row"><div class="detail-label">Estimated Arrival Time</div><div class="detail-value">${eta}</div></div>` : ""}
+          <div class="detail-row"><div class="detail-label">Pickup Time</div><div class="detail-value">${data.pickupDate} at ${data.pickupTime}</div></div>
           <div class="detail-row"><div class="detail-label">Pickup Address</div><div class="detail-value">${data.pickupAddress}</div></div>
           <div class="detail-row"><div class="detail-label">Destination</div><div class="detail-value">${data.dropoffAddress}</div></div>
         </div>
@@ -717,6 +733,86 @@ Thank you for choosing UTO.`;
         <p>We look forward to seeing you. If you need to make changes, please contact UTO support.</p>
       `;
       return { subject, html: wrapHtmlEmail("Booking Reminder", htmlBody), text };
+    }
+
+    case "driver_reminder": {
+      const bookings = data.driverUpcomingBookings ?? [];
+      const count = bookings.length;
+      const subject = `Your Upcoming UTO Bookings (${count}) — Driver Reminder`;
+      const windowLabel = data.reminderWindow?.trim();
+
+      const bookingBlocks = bookings
+        .map((b, i) => {
+          const fare = b.estimatedFare || "0.00";
+          const notes = b.notes?.trim() ? b.notes.trim() : "None";
+          const text = `Booking ${i + 1} of ${count}
+Booking Reference: ${b.bookingReference}
+Pickup Date: ${b.pickupDate}
+Pickup Time: ${b.pickupTime}
+Passenger: ${b.passengerName}
+Pickup Address: ${b.pickupAddress}
+Destination: ${b.dropoffAddress}
+Vehicle Required: ${b.vehicleType}
+Estimated Fare: £${fare}
+Special Instructions: ${notes}`;
+          const html = `
+        <div class="details-box">
+          <div class="details-title">Booking ${i + 1} of ${count}</div>
+          <div class="detail-row"><div class="detail-label">Booking Reference</div><div class="detail-value">${b.bookingReference}</div></div>
+          <div class="detail-row"><div class="detail-label">Pickup Date</div><div class="detail-value">${b.pickupDate}</div></div>
+          <div class="detail-row"><div class="detail-label">Pickup Time</div><div class="detail-value">${b.pickupTime}</div></div>
+          <div class="detail-row"><div class="detail-label">Passenger</div><div class="detail-value">${b.passengerName}</div></div>
+          <div class="detail-row"><div class="detail-label">Pickup Address</div><div class="detail-value">${b.pickupAddress}</div></div>
+          <div class="detail-row"><div class="detail-label">Destination</div><div class="detail-value">${b.dropoffAddress}</div></div>
+          <div class="detail-row"><div class="detail-label">Vehicle Required</div><div class="detail-value">${b.vehicleType}</div></div>
+          <div class="detail-row"><div class="detail-label">Estimated Fare</div><div class="detail-value">£${fare}</div></div>
+          <div class="detail-row"><div class="detail-label">Special Instructions</div><div class="detail-value">${notes}</div></div>
+        </div>`;
+          return { text, html };
+        });
+
+      const textList = bookingBlocks.map((b) => b.text).join("\n\n");
+      const htmlList = bookingBlocks.map((b) => b.html).join("");
+
+      const text = `Hi ${data.driverName || "Driver"},${windowLabel ? `\nThis is a ${windowLabel} reminder about your upcoming bookings with UTO.` : "\nThis is a friendly reminder about your upcoming bookings with UTO."} You have ${count} accepted booking${count === 1 ? "" : "s"}.
+
+${textList}
+
+Driver Responsibilities
+Please ensure you get in contact with the passenger, arrive at the pickup location on time, with your vehicle clean, roadworthy, and ready to provide a safe and professional service.
+If you anticipate any issue that may affect your ability to complete this booking, please notify UTO immediately. Where appropriate, you should also keep the passenger informed of any delays or circumstances affecting the journey.
+
+Cancellation Policy
+We value a reliable partnership with all of our drivers and appreciate your commitment to providing an excellent service.
+If you need to cancel an accepted booking, please do so as early as possible. If a driver cancels a booking less than 3 hours before the scheduled pickup time, the driver will be responsible for 50% of the estimated trip value, unless the cancellation is due to exceptional circumstances approved by UTO.
+This policy helps protect our passengers, who may struggle to find alternative transport at short notice, and supports a fair and dependable service for everyone.
+
+Thank you for your professionalism and for being part of the UTO driver network. We look forward to building a long-term, reliable partnership together.
+
+Kind regards,
+UTO Driver Support
+${UTO_SUPPORT_PHONE}
+${UTO_WEBSITE}`;
+
+      const htmlBody = `
+        <p>Hi ${data.driverName || "Driver"},</p>
+        <p>${windowLabel ? `This is a <strong>${windowLabel}</strong> reminder about your upcoming bookings with UTO.` : "This is a friendly reminder about your upcoming bookings with UTO."} You have <strong>${count}</strong> accepted booking${count === 1 ? "" : "s"}.</p>
+        ${htmlList}
+        <div class="policy-box">
+          <div class="policy-title">Driver Responsibilities</div>
+          <p style="margin:0 0 8px 0;">Please ensure you get in contact with the passenger, arrive at the pickup location on time, with your vehicle clean, roadworthy, and ready to provide a safe and professional service.</p>
+          <p style="margin:0;">If you anticipate any issue that may affect your ability to complete this booking, please notify UTO immediately. Where appropriate, you should also keep the passenger informed of any delays or circumstances affecting the journey.</p>
+        </div>
+        <div class="policy-box" style="border-left-color:#ef4444;background-color:#fef2f2;color:#7f1d1d;">
+          <div class="policy-title" style="color:#991b1b;">Cancellation Policy</div>
+          <p style="margin:0 0 8px 0;">We value a reliable partnership with all of our drivers and appreciate your commitment to providing an excellent service.</p>
+          <p style="margin:0 0 8px 0;">If you need to cancel an accepted booking, please do so as early as possible. If a driver cancels a booking less than 3 hours before the scheduled pickup time, the driver will be responsible for 50% of the estimated trip value, unless the cancellation is due to exceptional circumstances approved by UTO.</p>
+          <p style="margin:0;">This policy helps protect our passengers, who may struggle to find alternative transport at short notice, and supports a fair and dependable service for everyone.</p>
+        </div>
+        <p>Thank you for your professionalism and for being part of the UTO driver network. We look forward to building a long-term, reliable partnership together.</p>
+        <p>Kind regards,<br><strong>UTO Driver Support</strong><br>📞 ${UTO_SUPPORT_PHONE}<br>🌐 ${UTO_WEBSITE}</p>
+      `;
+      return { subject, html: wrapHtmlEmail("Driver Booking Reminder", htmlBody), text };
     }
 
     default: {
