@@ -45,6 +45,8 @@ interface BookingRow {
   email: string | null;
   customer_email: string | null;
   customer_name: string | null;
+  rider_email: string | null;
+  rider_name: string | null;
   flight_number: string | null;
   otp: string | null;
   reminder_emails_sent: string[] | null;
@@ -67,6 +69,7 @@ function resolvePassengerName(row: BookingRow): string {
   if (first || last) return `${first ?? ""} ${last ?? ""}`.trim();
   if (row.name?.trim()) return row.name.trim();
   if (row.customer_name?.trim()) return row.customer_name.trim();
+  if (row.rider_name?.trim()) return row.rider_name.trim();
   return "Valued Customer";
 }
 
@@ -101,9 +104,9 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, customer_name, flight_number, otp, reminder_emails_sent"
+      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, customer_name, rider_email, rider_name, flight_number, otp, reminder_emails_sent"
     )
-    .not("email", "is", null)
+    .or("email.not.is.null,customer_email.not.is.null,rider_email.not.is.null")
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false, nullsFirst: false })
     .limit(250);
@@ -121,7 +124,7 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
       continue;
     }
 
-    const recipient = row.email?.trim() || row.customer_email?.trim();
+    const recipient = row.email?.trim() || row.customer_email?.trim() || row.rider_email?.trim();
     if (!recipient) {
       outcome.skipped++;
       continue;

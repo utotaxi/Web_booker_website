@@ -96,6 +96,8 @@ interface BookingRow {
   email: string | null;
   customer_email: string | null;
   customer_name: string | null;
+  rider_email: string | null;
+  rider_name: string | null;
   driver_name: string | null;
   otp: string | null;
 }
@@ -158,6 +160,8 @@ export async function POST(req: NextRequest) {
     "email",
     "customer_email",
     "customer_name",
+    "rider_email",
+    "rider_name",
     "driver_name",
     "otp",
   ];
@@ -218,7 +222,7 @@ export async function POST(req: NextRequest) {
 
   const row = data as unknown as BookingRow;
   const bookingReference = bookingReferenceFromId(row.id);
-  const recipient = row.email?.trim() || row.customer_email?.trim();
+  const recipient = row.email?.trim() || row.customer_email?.trim() || row.rider_email?.trim();
 
   if (!recipient) {
     return NextResponse.json(
@@ -276,7 +280,7 @@ export async function POST(req: NextRequest) {
   const passengerName =
     first || last
       ? `${first ?? ""} ${last ?? ""}`.trim()
-      : row.name?.trim() || row.customer_name?.trim() || "Valued Customer";
+      : row.name?.trim() || row.customer_name?.trim() || row.rider_name?.trim() || "Valued Customer";
 
   const fareRaw = row.estimated_fare;
   const fareNum = typeof fareRaw === "number" ? fareRaw : Number(fareRaw);

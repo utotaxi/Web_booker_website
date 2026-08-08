@@ -58,6 +58,8 @@ interface BookingRow {
   email: string | null;
   customer_email: string | null;
   customer_name: string | null;
+  rider_email: string | null;
+  rider_name: string | null;
   otp: string | null;
   reminder_emails_sent: string[] | null;
 }
@@ -94,6 +96,7 @@ function resolvePassengerName(row: BookingRow): string {
   if (first || last) return `${first ?? ""} ${last ?? ""}`.trim();
   if (row.name?.trim()) return row.name.trim();
   if (row.customer_name?.trim()) return row.customer_name.trim();
+  if (row.rider_name?.trim()) return row.rider_name.trim();
   return "Valued Customer";
 }
 
@@ -146,10 +149,10 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, otp, reminder_emails_sent"
+      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, rider_email, rider_name, otp, reminder_emails_sent"
     )
     .eq("status", "driver_accepted")
-    .not("email", "is", null)
+    .or("email.not.is.null,customer_email.not.is.null,rider_email.not.is.null")
     .order("pickup_at", { ascending: false, nullsFirst: false })
     .limit(250);
 
@@ -215,7 +218,7 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
 
   for (const row of eligible) {
     const driverId = row.driver_id!.trim();
-    const recipient = row.email?.trim() || row.customer_email?.trim();
+    const recipient = row.email?.trim() || row.customer_email?.trim() || row.rider_email?.trim();
     if (!recipient) {
       outcome.skipped++;
       continue;

@@ -60,6 +60,8 @@ interface BookingRow {
   email: string | null;
   customer_email: string | null;
   customer_name: string | null;
+  rider_email: string | null;
+  rider_name: string | null;
 }
 
 export async function POST(req: NextRequest) {
@@ -82,7 +84,8 @@ export async function POST(req: NextRequest) {
       pickup_address, pickup, dropoff_address, dropoff,
       vehicle_type, vehicle, passengers, estimated_fare,
       payment_method, payment_status,
-      name, first_name, last_name, email, customer_email, customer_name
+      name, first_name, last_name, email, customer_email, customer_name,
+      rider_email, rider_name
     `);
 
   let idFilter: string | undefined;
@@ -134,7 +137,7 @@ export async function POST(req: NextRequest) {
   }
 
   const row = data as BookingRow;
-  const recipient = row.email?.trim() || row.customer_email?.trim();
+  const recipient = row.email?.trim() || row.customer_email?.trim() || row.rider_email?.trim();
 
   if (!recipient) {
     return NextResponse.json(
@@ -176,7 +179,7 @@ export async function POST(req: NextRequest) {
   const last = row.last_name?.trim();
   const passengerName =
     first || last ? `${first ?? ""} ${last ?? ""}`.trim()
-    : row.name?.trim() || row.customer_name?.trim() || "Valued Customer";
+    : row.name?.trim() || row.customer_name?.trim() || row.rider_name?.trim() || "Valued Customer";
 
   const fareRaw = row.estimated_fare;
   const fareNum = typeof fareRaw === "number" ? fareRaw : Number(fareRaw);
