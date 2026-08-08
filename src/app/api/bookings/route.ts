@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomInt } from "node:crypto";
 import { calculateBookingQuote } from "@/lib/booking-quote";
 import {
   incrementCouponRedemption,
@@ -317,9 +318,14 @@ export async function POST(req: NextRequest) {
       ).toISOString()
       : null;
 
+    // 4-digit ride-start PIN. The rider shares this with the driver to begin
+    // the trip; the driver app checks it against later_bookings.otp.
+    const ridePin = String(randomInt(0, 10000)).padStart(4, "0");
+
     const candidateInsert = {
       ...record,
       rider_id: riderId,
+      otp: ridePin,
       dropoff_by: dropoffByIso,
       stops: quote.stops,
       stops_text: quote.stops.length ? quote.stops.join(" -> ") : null,
@@ -486,6 +492,7 @@ export async function POST(req: NextRequest) {
             estimatedFare: chargeableFare,
             paymentMethod: paymentMethodDisplay,
             notes: payload.additional_note ?? undefined,
+            ridePin,
           },
         });
         console.log("[Booking Route] Email result:", emailResult);

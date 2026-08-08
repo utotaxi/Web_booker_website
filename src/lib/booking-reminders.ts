@@ -4,6 +4,7 @@ import {
   getSupabaseTableColumns,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
+import { randomInt } from "node:crypto";
 
 /**
  * Reminder windows sent before a booking's scheduled pickup time.
@@ -67,6 +68,7 @@ interface BookingRow {
   customer_email: string | null;
   customer_name: string | null;
   created_at: string | null;
+  otp: string | null;
   reminder_emails_sent: string[] | null;
 }
 
@@ -154,7 +156,7 @@ export async function processDueReminders(now: Date = new Date()): Promise<Remin
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, created_at, reminder_emails_sent"
+      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, created_at, otp, reminder_emails_sent"
     )
     .gte("pickup_at", fromIso)
     .lte("pickup_at", toIso)
@@ -209,6 +211,18 @@ export async function processDueReminders(now: Date = new Date()): Promise<Remin
 
     const bookingReference = bookingReferenceFromId(row.id);
 
+    let ridePin = row.otp?.trim() || "";
+    if (!ridePin) {
+      ridePin = String(randomInt(0, 10000)).padStart(4, "0");
+      const { error: otpErr } = await supabase
+        .from(BOOKINGS_TABLE)
+        .update({ otp: ridePin })
+        .eq("id", row.id);
+      if (otpErr) {
+        console.warn(`[Booking Reminders] Failed to persist otp for ${bookingReference}: ${otpErr.message}`);
+      }
+    }
+
     for (const window of REMINDER_WINDOWS) {
       if (alreadySent(sentKeys as string[], window.key)) continue;
 
@@ -236,6 +250,7 @@ export async function processDueReminders(now: Date = new Date()): Promise<Remin
         estimatedFare: resolveFare(row),
         paymentMethod: resolvePaymentMethod(row),
         reminderWindow: window.label,
+        ridePin,
       };
 
       const sendResult = await sendBookingEmail({

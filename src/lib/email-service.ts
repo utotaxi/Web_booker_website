@@ -97,6 +97,8 @@ export interface BookingEmailData {
   cancellationReason?: string;
   /** All of the driver's accepted upcoming bookings — used by driver_reminder. */
   driverUpcomingBookings?: DriverBookingItem[];
+  /** Random ride-start PIN stored on later_bookings.otp — shown to the rider. */
+  ridePin?: string;
 }
 
 export interface SendEmailOptions {
@@ -494,7 +496,7 @@ Payment Method:
 ${data.paymentMethod}
 Special Requirements:
 ${notesText}
-
+${data.ridePin ? `\nYour Ride PIN (share with your driver to start the ride): ${data.ridePin}\n` : ""}
 Cancellation & Refund Policy
 You may cancel your booking free of charge up to 3 hours before your scheduled pickup time. In this case, you will receive a full refund if payment has already been made.
 Cancellations made less than 3 hours before pickup may be subject to cancellation charges and may not be eligible for a refund.
@@ -558,6 +560,13 @@ UTO Customer Support`;
             <div class="detail-value">${notesText}</div>
           </div>
         </div>
+
+        ${data.ridePin ? `
+        <div class="policy-box" style="background-color:#eff6ff;border-left-color:#2563eb;color:#1e3a8a;text-align:center;">
+          <div class="policy-title" style="color:#1e40af;">Your Ride PIN</div>
+          <p style="margin:0 0 8px 0;">Share this PIN with your driver to start the ride.</p>
+          <p style="margin:0;font-size:30px;font-weight:700;letter-spacing:6px;color:#1e3a8a;">${data.ridePin}</p>
+        </div>` : ""}
 
         <div class="policy-box">
           <div class="policy-title">Cancellation & Refund Policy</div>
@@ -639,6 +648,12 @@ Thank you for choosing UTO.`;
           <div class="detail-row"><div class="detail-label">Destination</div><div class="detail-value">${data.dropoffAddress}</div></div>
         </div>
         <p>If you have any difficulty locating your driver, please contact them directly or call our support team on <strong>${UTO_SUPPORT_PHONE}</strong>.</p>
+        ${data.ridePin ? `
+        <div class="policy-box" style="background-color:#eff6ff;border-left-color:#2563eb;color:#1e3a8a;text-align:center;">
+          <div class="policy-title" style="color:#1e40af;">Your Ride PIN</div>
+          <p style="margin:0 0 8px 0;">Share this PIN with your driver to start the ride.</p>
+          <p style="margin:0;font-size:30px;font-weight:700;letter-spacing:6px;color:#1e3a8a;">${data.ridePin}</p>
+        </div>` : ""}
         <div class="policy-box">
           <div class="policy-title">Journey Changes</div>
           <p style="margin: 0 0 8px 0;">If you would like to make any changes to your journey after your driver has been assigned (including adding additional stops, changing the destination, or requesting a different route), please discuss these with your driver before the journey commences.</p>
@@ -776,6 +791,12 @@ ${review.text}`;
           <div class="detail-row"><div class="detail-label">Estimated Fare</div><div class="detail-value">£${fareDisplay}</div></div>
           <div class="detail-row"><div class="detail-label">Payment Method</div><div class="detail-value">${data.paymentMethod}</div></div>
         </div>
+        ${data.ridePin ? `
+        <div class="policy-box" style="background-color:#eff6ff;border-left-color:#2563eb;color:#1e3a8a;text-align:center;">
+          <div class="policy-title" style="color:#1e40af;">Your Ride PIN</div>
+          <p style="margin:0 0 8px 0;">Share this PIN with your driver to start the ride.</p>
+          <p style="margin:0;font-size:30px;font-weight:700;letter-spacing:6px;color:#1e3a8a;">${data.ridePin}</p>
+        </div>` : ""}
         <p>We look forward to seeing you. If you need to make changes, please contact UTO support.</p>
       `;
       return { subject, html: wrapHtmlEmail("Booking Reminder", htmlBody), text };

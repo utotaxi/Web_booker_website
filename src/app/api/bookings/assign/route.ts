@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomInt } from "node:crypto";
 import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
@@ -96,6 +97,7 @@ interface BookingRow {
   customer_email: string | null;
   customer_name: string | null;
   driver_name: string | null;
+  otp: string | null;
 }
 
 function pickColumns(
@@ -157,6 +159,7 @@ export async function POST(req: NextRequest) {
     "customer_email",
     "customer_name",
     "driver_name",
+    "otp",
   ];
   const selectCols = baseSelectCols
     .filter((c) => allowedColumns.has(c))
@@ -292,6 +295,18 @@ export async function POST(req: NextRequest) {
       ? "Coupon Discount"
       : "Pay in Vehicle";
 
+  let ridePin = row.otp?.trim() || "";
+  if (!ridePin) {
+    ridePin = String(randomInt(0, 10000)).padStart(4, "0");
+    const { error: otpErr } = await supabase
+      .from(BOOKINGS_TABLE)
+      .update({ otp: ridePin })
+      .eq("id", row.id);
+    if (otpErr) {
+      console.warn(`[Bookings Assign] Failed to persist otp for ${bookingReference}: ${otpErr.message}`);
+    }
+  }
+
   const emailData: BookingEmailData = {
     bookingReference,
     passengerName,
@@ -316,6 +331,7 @@ export async function POST(req: NextRequest) {
     vehicleRegistration:
       body.vehicleRegistration?.trim() || body.vehiclePlate?.trim(),
     eta: body.eta?.trim(),
+    ridePin,
   };
 
   const sendResult = await sendBookingEmail({

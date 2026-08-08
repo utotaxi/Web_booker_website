@@ -3,6 +3,7 @@ import {
   getSupabaseAdmin,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
+import { randomInt } from "node:crypto";
 
 /**
  * Booking-confirmation email notifier.
@@ -45,6 +46,7 @@ interface BookingRow {
   customer_email: string | null;
   customer_name: string | null;
   flight_number: string | null;
+  otp: string | null;
   reminder_emails_sent: string[] | null;
 }
 
@@ -99,7 +101,7 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, customer_name, flight_number, reminder_emails_sent"
+      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, customer_name, flight_number, otp, reminder_emails_sent"
     )
     .not("email", "is", null)
     .gte("created_at", sinceIso)
@@ -134,6 +136,22 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
     }
 
     const bookingReference = bookingReferenceFromId(row.id);
+
+    // Ensure the booking has a ride-start PIN. App-created bookings may not
+    // set otp; generate + persist one so the rider gets it in this email and
+    // the driver can verify ride start against later_bookings.otp.
+    let ridePin = row.otp?.trim() || "";
+    if (!ridePin) {
+      ridePin = String(randomInt(0, 10000)).padStart(4, "0");
+      const { error: otpErr } = await supabase
+        .from(BOOKINGS_TABLE)
+        .update({ otp: ridePin })
+        .eq("id", row.id);
+      if (otpErr) {
+        console.warn(`[Confirmations] Failed to persist otp for ${bookingReference}: ${otpErr.message}`);
+      }
+    }
+
     const emailData: BookingEmailData = {
       bookingReference,
       passengerName: resolvePassengerName(row),
@@ -147,6 +165,7 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
       estimatedFare: resolveFare(row),
       paymentMethod: resolvePaymentMethod(row),
       notes: row.flight_number?.trim() ? `Flight: ${row.flight_number.trim()}` : undefined,
+      ridePin,
     };
 
     const sendResult = await sendBookingEmail({

@@ -3,6 +3,7 @@ import {
   getSupabaseAdmin,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
+import { randomInt } from "node:crypto";
 
 /**
  * Driver-assignment email notifier.
@@ -57,6 +58,7 @@ interface BookingRow {
   email: string | null;
   customer_email: string | null;
   customer_name: string | null;
+  otp: string | null;
   reminder_emails_sent: string[] | null;
 }
 
@@ -144,7 +146,7 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, reminder_emails_sent"
+      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, otp, reminder_emails_sent"
     )
     .eq("status", "driver_accepted")
     .not("email", "is", null)
@@ -240,6 +242,18 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
       "Your assigned driver";
     const driverPhone = user?.phone?.trim() || undefined;
 
+    let ridePin = row.otp?.trim() || "";
+    if (!ridePin) {
+      ridePin = String(randomInt(0, 10000)).padStart(4, "0");
+      const { error: otpErr } = await supabase
+        .from(BOOKINGS_TABLE)
+        .update({ otp: ridePin })
+        .eq("id", row.id);
+      if (otpErr) {
+        console.warn(`[Driver Assignment Notifier] Failed to persist otp for ${bookingReference}: ${otpErr.message}`);
+      }
+    }
+
     const emailData: BookingEmailData = {
       bookingReference,
       passengerName: resolvePassengerName(row),
@@ -260,6 +274,7 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
       vehicleRegistration: driver?.license_plate?.trim() || undefined,
       // ETA is not stored on the booking; the template omits the row when absent.
       eta: undefined,
+      ridePin,
     };
 
     const sendResult = await sendBookingEmail({
