@@ -30,6 +30,8 @@ interface BookingRow {
   status: string | null;
   driver_id: string | null;
   pickup_at: string | null;
+  pickup_date: string | null;
+  pickup_time: string | null;
   pickup_address: string | null;
   dropoff_address: string | null;
   vehicle_type: string | null;
@@ -80,28 +82,27 @@ function resolveFare(row: BookingRow): string {
   return num.toFixed(2);
 }
 
-/** DD/MM/YYYY from an ISO pickup_at (deterministic, UTC wall-time). */
-function formatPickupDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "N/A";
-  return d.toLocaleDateString("en-GB", {
-    timeZone: "UTC",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+/**
+ * Pickup date/time resolution — MUST mirror the rider-facing notifiers.
+ *
+ * The rider enters pickup as local wall-clock text stored verbatim in the
+ * `pickup_date` ("YYYY-MM-DD") and `pickup_time` ("HH:MM") columns. The
+ * `pickup_at` timestamptz column is the UTC conversion of those and therefore
+ * drifts by the local DST offset (e.g. 15:00 BST is stored as 14:00Z). Resolving
+ * from `pickup_at` would show the driver a different time than the rider, so we
+ * prefer the text columns and only fall back to splitting the `pickup_at` ISO
+ * string (never re-formatting it through a timezone).
+ */
+function resolvePickupDate(row: BookingRow): string {
+  if (row.pickup_date?.trim()) return row.pickup_date.trim();
+  if (row.pickup_at) return row.pickup_at.split("T")[0];
+  return "N/A";
 }
 
-/** HH:MM (24h) from an ISO pickup_at. */
-function formatPickupTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "N/A";
-  return d.toLocaleTimeString("en-GB", {
-    timeZone: "UTC",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function resolvePickupTime(row: BookingRow): string {
+  if (row.pickup_time?.trim()) return row.pickup_time.trim();
+  if (row.pickup_at) return row.pickup_at.split("T")[1]?.slice(0, 5) ?? "N/A";
+  return "N/A";
 }
 
 function driverWindowMarker(windowKey: string): string {
@@ -168,7 +169,7 @@ export async function processDriverReminders(now: Date = new Date()): Promise<Dr
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, first_name, last_name, name, flight_number, reminder_emails_sent"
+      "id, status, driver_id, pickup_at, pickup_date, pickup_time, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, first_name, last_name, name, flight_number, reminder_emails_sent"
     )
     .eq("status", "driver_accepted")
     .gt("pickup_at", now.toISOString())
@@ -271,8 +272,8 @@ export async function processDriverReminders(now: Date = new Date()): Promise<Dr
       const items: DriverBookingItem[] = driverBookings.map((b) => ({
         bookingReference: bookingReferenceFromId(b.id),
         passengerName: resolvePassengerName(b),
-        pickupDate: formatPickupDate(b.pickup_at!),
-        pickupTime: formatPickupTime(b.pickup_at!),
+        pickupDate: resolvePickupDate(b),
+        pickupTime: resolvePickupTime(b),
         pickupAddress: b.pickup_address?.trim() || "N/A",
         dropoffAddress: b.dropoff_address?.trim() || "N/A",
         vehicleType: b.vehicle_type?.trim() || "Standard Vehicle",

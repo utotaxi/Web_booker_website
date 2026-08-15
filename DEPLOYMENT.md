@@ -195,7 +195,49 @@ curl -X POST https://<your-app>.fly.dev/api/email/test \
   -d '{"type":"booking_reminder","to":"<your-email>"}'
 ```
 
-### 9.5 Trip-completed receipt (triggered on completion)
+### 9.5 Driver-assigned email to the rider (automated, ≤5 min)
+
+When a driver is **assigned** (`status='assigned'` + `driver_id`) or **accepts**
+(`status='driver_accepted'`) a ride — via the driver/dispatch app writing
+directly to `later_bookings` — the rider must receive the `driver_assigned`
+email within 5 minutes. The dispatch integration route `POST /api/bookings/assign`
+sends the email synchronously (immediate); the direct-write path relies on this
+cron notifier (`src/lib/driver-assignment-notifier.ts`) which is idempotent —
+each `(booking, driver_id)` pair is recorded in `reminder_emails_sent` as
+`driver_assigned:<driver_id>` so it is never sent twice, and a re-assignment to
+a different driver correctly sends a fresh email.
+
+It is exposed at `GET/POST /api/cron/driver-assignments`, protected by the same
+`CRON_SECRET` header. **Schedule it every 5 minutes** (no less frequently, so
+the 5-minute SLA holds):
+
+**Option A — cron-job.org (free, no infra):**
+- URL: `https://<your-app>.fly.dev/api/cron/driver-assignments`
+- Method: `GET`
+- Headers: `x-cron-secret: <CRON_SECRET>`
+- Schedule: every 5 minutes (`*/5 * * * *`)
+
+**Option B — GitHub Actions** (`.github/workflows/driver-assignments.yml`):
+```yaml
+name: UTO driver-assignment emails
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsS -X GET \
+          -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+          "https://${{ secrets.APP_DOMAIN }}/api/cron/driver-assignments"
+```
+
+> Pickup time in these emails is read from the `pickup_date`/`pickup_time`
+> columns (the local wall-clock the rider entered), so the schedule shown to
+> the rider, the driver, and in reminders is always identical.
+
+### 9.6 Trip-completed receipt (triggered on completion)
 
 When a trip finishes, your driver / dispatch system should call:
 
@@ -219,10 +261,10 @@ curl -X POST https://<your-app>.fly.dev/api/email/test \
   -d '{"type":"trip_completed","to":"<your-email>"}'
 ```
 
-### 9.6 Env vars summary
+### 9.7 Env vars summary
 
 | Variable | Purpose |
 |---|---|
-| `CRON_SECRET` | Protects `/api/cron/reminders` and `/api/bookings/complete` |
+| `CRON_SECRET` | Protects `/api/cron/reminders`, `/api/cron/driver-assignments`, and `/api/bookings/complete` |
 | `SMTP_*` | Same transport as confirmations |
 | `SUPABASE_SERVICE_ROLE_KEY` | Reads/writes `later_bookings` for reminders |

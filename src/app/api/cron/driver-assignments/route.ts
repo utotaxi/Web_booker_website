@@ -10,7 +10,9 @@ export const dynamic = "force-dynamic";
  *
  * Schedule an external job (cron-job.org / GitHub Actions / Fly cron) to hit:
  *   GET/POST https://<your-domain>/api/cron/driver-assignments
- * every 2-5 minutes with header `x-cron-secret: <CRON_SECRET>`.
+ * every 5 minutes (no more) with header `x-cron-secret: <CRON_SECRET>`, so the
+ * rider receives the driver-assigned email within 5 minutes of a driver being
+ * assigned or accepting the ride.
  *
  * The job is idempotent — each (booking, driver) pair is recorded in the
  * booking's `reminder_emails_sent` jsonb column as `driver_assigned:<driver_id>`

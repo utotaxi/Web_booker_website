@@ -63,8 +63,8 @@ export type EmailType =
 export interface DriverBookingItem {
   bookingReference: string;
   passengerName: string;
-  pickupDate: string; // DD/MM/YYYY
-  pickupTime: string; // HH:MM (24h)
+  pickupDate: string; // YYYY-MM-DD — same source as rider emails
+  pickupTime: string; // HH:MM (24h) — same source as rider emails
   pickupAddress: string;
   dropoffAddress: string;
   vehicleType: string;

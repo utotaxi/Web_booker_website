@@ -8,22 +8,35 @@ import { randomInt } from "node:crypto";
 /**
  * Driver-assignment email notifier.
  *
- * The driver / dispatch app assigns a driver by writing directly to
- * `later_bookings` (setting `assignment_status = 'accepted'` + `driver_id`).
- * That path sends no email — so this notifier scans for newly-accepted
- * bookings and dispatches the "driver_assigned" email with the driver's
- * vehicle details and phone number.
+ * A driver can land on a booking in two ways, and the rider must receive the
+ * "driver_assigned" email within ~5 minutes of either:
+ *   1. The driver/dispatch app accepts a ride — writes status='driver_accepted'
+ *      + driver_id directly to `later_bookings`.
+ *   2. Dispatch assigns a driver directly — writes status='assigned' +
+ *      driver_id to `later_bookings`.
+ * (The /api/bookings/assign route is a third path; it sends the email
+ * synchronously and is name-based with no driver_id, so this scan skips those
+ * rows — no duplicate.)
+ *
+ * Neither direct-write path sends an email, so this notifier scans for
+ * newly-assigned/accepted bookings and dispatches the "driver_assigned" email
+ * with the driver's vehicle details and phone number.
  *
  * Vehicle details live on the `drivers` table (keyed by `drivers.id` =
  * `later_bookings.driver_id`); the driver's name and phone live on `users`
  * (keyed by `users.id` = `drivers.user_id`).
+ *
+ * Pickup time is resolved from the `pickup_date`/`pickup_time` text columns
+ * (the local wall-clock values the rider entered), NOT from the UTC-converted
+ * `pickup_at`, so the driver-assigned email the rider receives matches the
+ * schedule shown everywhere else.
  *
  * Dedupe: we store `driver_assigned:<driver_id>` in the booking's
  * `reminder_emails_sent` jsonb column. If the same driver is re-confirmed we
  * do not re-send; if a *different* driver is later assigned to the same
  * booking the marker differs and a fresh email is sent.
  *
- * Trigger via the cron route `/api/cron/driver-assignments` every few minutes.
+ * Trigger via the cron route `/api/cron/driver-assignments` every 5 minutes.
  */
 
 /** Statuses that should no longer receive a driver-assigned email. */
@@ -142,16 +155,22 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
   const supabase = getSupabaseAdmin();
   const outcome: AssignmentOutcome = { sent: [], failed: [], skipped: 0, scanned: 0 };
 
-  // The driver app signals "driver accepted" by setting status='driver_accepted'
-  // (assignment_status is a legacy column used on older cancelled trips).
+  // A driver can be attached to a booking via two paths:
+  //   1. The driver/dispatch app accepts a ride → status='driver_accepted'
+  //      (written directly to later_bookings with driver_id set).
+  //   2. Dispatch assigns a driver directly → status='assigned' with driver_id.
+  // The /api/bookings/assign route sends the email synchronously and does NOT
+  // set driver_id (it is name-based), so those rows are skipped here (no
+  // driver_id) and never double-emailed. Any row that reaches this scan with a
+  // driver_id and no `driver_assigned:<driver_id>` marker yet is sent to.
   // Only bookings with a passenger email are candidates. The per-driver marker
   // check in code makes re-runs safe, so we don't need a tight time window.
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, rider_email, rider_name, otp, reminder_emails_sent"
+      "id, status, assignment_status, driver_id, pickup_at, pickup_date, pickup_time, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, rider_email, rider_name, otp, reminder_emails_sent"
     )
-    .eq("status", "driver_accepted")
+    .in("status", ["assigned", "driver_accepted"])
     .or("email.not.is.null,customer_email.not.is.null,rider_email.not.is.null")
     .order("pickup_at", { ascending: false, nullsFirst: false })
     .limit(250);
