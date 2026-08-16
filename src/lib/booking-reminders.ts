@@ -2,6 +2,7 @@ import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
   getSupabaseTableColumns,
+  selectColumnsFor,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
 import { randomInt } from "node:crypto";
@@ -156,11 +157,20 @@ export async function processDueReminders(now: Date = new Date()): Promise<Remin
   // Pull every pickup between now and the lookahead horizon. We filter the
   // active-window logic in code because reminder timing is relative to both
   // pickup_at and created_at, which is awkward to express purely in SQL.
+  // pickup_date/pickup_time carry the local wall-clock time the rider entered;
+  // they're optional (added by the local-time migration) so the select is
+  // column-aware and won't 500 if they're absent — resolvers fall back to
+  // pickup_at.
+  const selectCols = await selectColumnsFor(BOOKINGS_TABLE, [
+    "id", "status", "pickup_at", "pickup_date", "pickup_time",
+    "pickup_address", "dropoff_address", "vehicle_type", "passengers",
+    "estimated_fare", "payment_method", "payment_status", "name",
+    "first_name", "last_name", "email", "created_at", "otp",
+    "reminder_emails_sent",
+  ]);
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
-    .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, created_at, otp, reminder_emails_sent"
-    )
+    .select(selectCols)
     .gte("pickup_at", fromIso)
     .lte("pickup_at", toIso)
     .order("pickup_at", { ascending: true });
@@ -169,7 +179,7 @@ export async function processDueReminders(now: Date = new Date()): Promise<Remin
     throw new Error(`Failed to query upcoming bookings: ${error.message}`);
   }
 
-  const bookings = (data ?? []) as BookingRow[];
+  const bookings = (data ?? []) as unknown as BookingRow[];
   outcome.scanned = bookings.length;
 
   // The reminder_emails_sent column may not exist yet on tables where the

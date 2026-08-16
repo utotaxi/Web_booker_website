@@ -1,6 +1,7 @@
 import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
+  selectColumnsFor,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
 import { randomInt } from "node:crypto";
@@ -165,11 +166,20 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
   // driver_id and no `driver_assigned:<driver_id>` marker yet is sent to.
   // Only bookings with a passenger email are candidates. The per-driver marker
   // check in code makes re-runs safe, so we don't need a tight time window.
+  // pickup_date/pickup_time carry the local wall-clock time the rider entered
+  // (UK time), so the driver-assigned email shows the same time the rider sees.
+  // They're optional (added by the local-time migration); the select is
+  // column-aware so it won't 500 if absent, and resolvers fall back to pickup_at.
+  const selectCols = await selectColumnsFor(BOOKINGS_TABLE, [
+    "id", "status", "assignment_status", "driver_id", "pickup_at",
+    "pickup_date", "pickup_time", "pickup_address", "dropoff_address",
+    "vehicle_type", "passengers", "estimated_fare", "payment_method",
+    "payment_status", "name", "first_name", "last_name", "email", "otp",
+    "reminder_emails_sent",
+  ]);
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
-    .select(
-      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, otp, reminder_emails_sent"
-    )
+    .select(selectCols)
     .in("status", ["assigned", "driver_accepted"])
     .not("email", "is", null)
     .order("pickup_at", { ascending: false, nullsFirst: false })
@@ -179,7 +189,7 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
     throw new Error(`Failed to query accepted bookings: ${error.message}`);
   }
 
-  const bookings = (data ?? []) as BookingRow[];
+  const bookings = (data ?? []) as unknown as BookingRow[];
   outcome.scanned = bookings.length;
 
   // Skip bookings that are inactive (cancelled/completed) or missing a driver.

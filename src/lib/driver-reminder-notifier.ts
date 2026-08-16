@@ -1,6 +1,7 @@
 import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
+  selectColumnsFor,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData, type DriverBookingItem } from "@/lib/email-service";
 import { REMINDER_WINDOWS } from "@/lib/booking-reminders";
@@ -166,11 +167,19 @@ export async function processDriverReminders(now: Date = new Date()): Promise<Dr
   // Trigger detection (within-window) is applied in code below.
   const horizonIso = new Date(nowMs + 365 * 24 * 60 * 60 * 1000).toISOString();
 
+  // pickup_date/pickup_time carry the local wall-clock time the rider entered
+  // so the driver reminder shows the same local time the rider sees. They're
+  // optional (added by the local-time migration); the select is column-aware
+  // so it won't 500 if absent, and resolvers fall back to pickup_at.
+  const selectCols = await selectColumnsFor(BOOKINGS_TABLE, [
+    "id", "status", "driver_id", "pickup_at", "pickup_date", "pickup_time",
+    "pickup_address", "dropoff_address", "vehicle_type", "passengers",
+    "estimated_fare", "first_name", "last_name", "name", "flight_number",
+    "reminder_emails_sent",
+  ]);
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
-    .select(
-      "id, status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, first_name, last_name, name, flight_number, reminder_emails_sent"
-    )
+    .select(selectCols)
     .eq("status", "driver_accepted")
     .gt("pickup_at", now.toISOString())
     .lte("pickup_at", horizonIso)
@@ -180,7 +189,7 @@ export async function processDriverReminders(now: Date = new Date()): Promise<Dr
     throw new Error(`Failed to query driver-accepted upcoming bookings: ${error.message}`);
   }
 
-  const bookings = (data ?? []) as BookingRow[];
+  const bookings = (data ?? []) as unknown as BookingRow[];
   outcome.scanned = bookings.length;
 
   // Only bookings with a driver can trigger a driver reminder.

@@ -1,6 +1,7 @@
 import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
+  selectColumnsFor,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
 
@@ -29,6 +30,8 @@ interface BookingRow {
   id: string;
   status: string | null;
   pickup_at: string | null;
+  pickup_date: string | null;
+  pickup_time: string | null;
   pickup_address: string | null;
   dropoff_address: string | null;
   vehicle_type: string | null;
@@ -87,11 +90,13 @@ function resolveFare(row: BookingRow): string {
 }
 
 function resolvePickupDate(row: BookingRow): string {
+  if (row.pickup_date?.trim()) return row.pickup_date.trim();
   if (row.pickup_at) return row.pickup_at.split("T")[0];
   return "N/A";
 }
 
 function resolvePickupTime(row: BookingRow): string {
+  if (row.pickup_time?.trim()) return row.pickup_time.trim();
   if (row.pickup_at) return row.pickup_at.split("T")[1]?.slice(0, 5) ?? "N/A";
   return "N/A";
 }
@@ -106,11 +111,19 @@ export async function processCompletedTrips(now: Date = new Date()): Promise<Com
 
   const sinceIso = new Date(now.getTime() - COMPLETION_LOOKBACK_MS).toISOString();
 
+  // pickup_date/pickup_time carry the local wall-clock time the rider entered
+  // (UK time). They're optional (added by the local-time migration); the select
+  // is column-aware so it won't 500 if absent, and resolvers fall back to
+  // pickup_at.
+  const selectCols = await selectColumnsFor(BOOKINGS_TABLE, [
+    "id", "status", "pickup_at", "pickup_date", "pickup_time",
+    "pickup_address", "dropoff_address", "vehicle_type", "passengers",
+    "estimated_fare", "payment_method", "payment_status", "name",
+    "first_name", "last_name", "email", "reminder_emails_sent",
+  ]);
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
-    .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, reminder_emails_sent"
-    )
+    .select(selectCols)
     .eq("status", "completed")
     .not("email", "is", null)
     .gte("updated_at", sinceIso)
@@ -121,7 +134,7 @@ export async function processCompletedTrips(now: Date = new Date()): Promise<Com
     throw new Error(`Failed to query completed bookings: ${error.message}`);
   }
 
-  const bookings = (data ?? []) as BookingRow[];
+  const bookings = (data ?? []) as unknown as BookingRow[];
   outcome.scanned = bookings.length;
 
   for (const row of bookings) {

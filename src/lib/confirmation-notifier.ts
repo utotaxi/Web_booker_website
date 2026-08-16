@@ -1,6 +1,7 @@
 import {
   BOOKINGS_TABLE,
   getSupabaseAdmin,
+  selectColumnsFor,
 } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
 import { randomInt } from "node:crypto";
@@ -32,6 +33,8 @@ interface BookingRow {
   id: string;
   status: string | null;
   pickup_at: string | null;
+  pickup_date: string | null;
+  pickup_time: string | null;
   pickup_address: string | null;
   dropoff_address: string | null;
   vehicle_type: string | null;
@@ -101,11 +104,20 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
 
   const sinceIso = new Date(now.getTime() - CONFIRM_LOOKBACK_MS).toISOString();
 
+  // pickup_date/pickup_time carry the local wall-clock time the rider entered
+  // (UK time) so the confirmation shows the time the rider booked. They're
+  // optional (added by the local-time migration); the select is column-aware
+  // so it won't 500 if absent, and the resolver falls back to pickup_at.
+  const selectCols = await selectColumnsFor(BOOKINGS_TABLE, [
+    "id", "status", "pickup_at", "pickup_date", "pickup_time",
+    "pickup_address", "dropoff_address", "vehicle_type", "passengers",
+    "estimated_fare", "payment_method", "payment_status", "name",
+    "first_name", "last_name", "email", "flight_number", "otp",
+    "reminder_emails_sent",
+  ]);
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
-    .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, flight_number, otp, reminder_emails_sent"
-    )
+    .select(selectCols)
     .not("email", "is", null)
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false, nullsFirst: false })
@@ -115,7 +127,7 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
     throw new Error(`Failed to query unconfirmed bookings: ${error.message}`);
   }
 
-  const bookings = (data ?? []) as BookingRow[];
+  const bookings = (data ?? []) as unknown as BookingRow[];
   outcome.scanned = bookings.length;
 
   for (const row of bookings) {
@@ -159,8 +171,8 @@ export async function processUnconfirmedBookings(now: Date = new Date()): Promis
       bookingReference,
       passengerName: resolvePassengerName(row),
       passengerEmail: recipient,
-      pickupDate: row.pickup_at ? row.pickup_at.split("T")[0] : "N/A",
-      pickupTime: row.pickup_at ? row.pickup_at.split("T")[1]?.slice(0, 5) ?? "N/A" : "N/A",
+      pickupDate: row.pickup_date?.trim() || (row.pickup_at ? row.pickup_at.split("T")[0] : "N/A"),
+      pickupTime: row.pickup_time?.trim() || (row.pickup_at ? row.pickup_at.split("T")[1]?.slice(0, 5) ?? "N/A" : "N/A"),
       pickupAddress: row.pickup_address?.trim() || "N/A",
       dropoffAddress: row.dropoff_address?.trim() || "N/A",
       vehicleType: row.vehicle_type?.trim() || "Standard Vehicle",

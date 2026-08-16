@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { BOOKINGS_TABLE, getSupabaseAdmin } from "@/lib/supabase-admin";
+import { BOOKINGS_TABLE, getSupabaseAdmin, selectColumnsFor } from "@/lib/supabase-admin";
 import { sendBookingEmail, type BookingEmailData } from "@/lib/email-service";
 
 export const runtime = "nodejs";
@@ -79,13 +79,17 @@ export async function POST(req: NextRequest) {
   const supabase = getSupabaseAdmin();
 
   // Resolve the booking by row id, or by booking reference (UTO-<id8>).
-  let query = supabase.from(BOOKINGS_TABLE).select(`
-      id, status, pickup_at,
-      pickup_address, dropoff_address,
-      vehicle_type, passengers, estimated_fare,
-      payment_method, payment_status,
-      name, first_name, last_name, email
-    `);
+  // pickup_date/pickup_time carry the local wall-clock time the rider entered
+  // (UK time); they're optional (added by the local-time migration), so the
+  // select is column-aware and won't 500 if absent — resolvers fall back to
+  // pickup_at.
+  const selectCols = await selectColumnsFor(BOOKINGS_TABLE, [
+    "id", "status", "pickup_at", "pickup_date", "pickup_time",
+    "pickup_address", "dropoff_address", "vehicle_type", "passengers",
+    "estimated_fare", "payment_method", "payment_status",
+    "name", "first_name", "last_name", "email",
+  ]);
+  let query = supabase.from(BOOKINGS_TABLE).select(selectCols);
 
   let idFilter: string | undefined;
   if (body.id?.trim()) {
@@ -135,7 +139,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Booking not found." }, { status: 404 });
   }
 
-  const row = data as BookingRow;
+  const row = data as unknown as BookingRow;
   const recipient = row.email?.trim() || row.customer_email?.trim() || row.rider_email?.trim();
 
   if (!recipient) {
