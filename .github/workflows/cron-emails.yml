@@ -11,6 +11,10 @@
 #
 # Both endpoints are idempotent (per-booking dedupe markers), so a missed or
 # duplicated run is harmless.
+#
+# A non-2xx response fails the step (and the job) so 500s are visible in the
+# Actions list instead of being silently swallowed. The response body — which
+# includes sent/failed counts and any thrown error — is printed for debugging.
 name: Automated Email Crons
 
 on:
@@ -25,16 +29,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger driver-assignment notifier
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://uto-web-booker.fly.dev' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -fsS -X GET \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+          url="$APP_URL/api/cron/driver-assignments"
+          echo "→ $url"
+          code=$(curl -sS -o /tmp/driver-assignments.json -w '%{http_code}' -X GET \
+            -H "x-cron-secret: $CRON_SECRET" \
             -H "user-agent: github-actions-cron" \
-            "${{ vars.APP_URL || 'https://uto-web-booker.fly.dev' }}/api/cron/driver-assignments" \
-            || true
+            "$url")
+          echo "HTTP $code"
+          cat /tmp/driver-assignments.json
+          echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::driver-assignments endpoint returned HTTP $code"
+            exit 1
+          fi
       - name: Trigger booking reminders
+        env:
+          APP_URL: ${{ vars.APP_URL || 'https://uto-web-booker.fly.dev' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -fsS -X GET \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+          url="$APP_URL/api/cron/reminders"
+          echo "→ $url"
+          code=$(curl -sS -o /tmp/reminders.json -w '%{http_code}' -X GET \
+            -H "x-cron-secret: $CRON_SECRET" \
             -H "user-agent: github-actions-cron" \
-            "${{ vars.APP_URL || 'https://uto-web-booker.fly.dev' }}/api/cron/reminders" \
-            || true
+            "$url")
+          echo "HTTP $code"
+          cat /tmp/reminders.json
+          echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::reminders endpoint returned HTTP $code"
+            exit 1
+          fi
