@@ -80,12 +80,11 @@ export async function POST(req: NextRequest) {
 
   // Resolve the booking by row id, or by booking reference (UTO-<id8>).
   let query = supabase.from(BOOKINGS_TABLE).select(`
-      id, status, pickup_at, pickup_date, pickup_time,
-      pickup_address, pickup, dropoff_address, dropoff,
-      vehicle_type, vehicle, passengers, estimated_fare,
+      id, status, pickup_at,
+      pickup_address, dropoff_address,
+      vehicle_type, passengers, estimated_fare,
       payment_method, payment_status,
-      name, first_name, last_name, email, customer_email, customer_name,
-      rider_email, rider_name
+      name, first_name, last_name, email
     `);
 
   let idFilter: string | undefined;

@@ -168,10 +168,10 @@ export async function processAcceptedDriverAssignments(): Promise<AssignmentOutc
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, assignment_status, driver_id, pickup_at, pickup_date, pickup_time, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, rider_email, rider_name, otp, reminder_emails_sent"
+      "id, status, assignment_status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, otp, reminder_emails_sent"
     )
     .in("status", ["assigned", "driver_accepted"])
-    .or("email.not.is.null,customer_email.not.is.null,rider_email.not.is.null")
+    .not("email", "is", null)
     .order("pickup_at", { ascending: false, nullsFirst: false })
     .limit(250);
 

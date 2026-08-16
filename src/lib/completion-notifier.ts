@@ -109,10 +109,10 @@ export async function processCompletedTrips(now: Date = new Date()): Promise<Com
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, customer_email, customer_name, rider_email, rider_name, reminder_emails_sent"
+      "id, status, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, payment_method, payment_status, name, first_name, last_name, email, reminder_emails_sent"
     )
     .eq("status", "completed")
-    .or("email.not.is.null,customer_email.not.is.null,rider_email.not.is.null")
+    .not("email", "is", null)
     .gte("updated_at", sinceIso)
     .order("updated_at", { ascending: false, nullsFirst: false })
     .limit(250);

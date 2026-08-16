@@ -169,7 +169,7 @@ export async function processDriverReminders(now: Date = new Date()): Promise<Dr
   const { data, error } = await supabase
     .from(BOOKINGS_TABLE)
     .select(
-      "id, status, driver_id, pickup_at, pickup_date, pickup_time, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, first_name, last_name, name, flight_number, reminder_emails_sent"
+      "id, status, driver_id, pickup_at, pickup_address, dropoff_address, vehicle_type, passengers, estimated_fare, first_name, last_name, name, flight_number, reminder_emails_sent"
     )
     .eq("status", "driver_accepted")
     .gt("pickup_at", now.toISOString())
