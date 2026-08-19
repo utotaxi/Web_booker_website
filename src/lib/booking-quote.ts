@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  quoteServiceAreaLeg,
+  type ServiceAreaQuote,
+} from "@/lib/service-area-quote";
 
 interface RouteCoordinates {
   lat: number;
@@ -11,35 +15,6 @@ interface RouteMetrics {
   pickupCoordinates: RouteCoordinates | null;
   dropoffCoordinates: RouteCoordinates | null;
   source: "google_directions" | "haversine_estimate";
-}
-
-interface RuleVehiclePricing {
-  enabled?: boolean;
-  min_price?: number | string;
-  start_price?: number | string;
-  waiting_price?: number | string;
-  base_mile_price?: number | string;
-  mile_tier_prices?: Record<string, number | string>;
-  base_minute_price?: number | string;
-  minute_tier_prices?: Record<string, number | string>;
-}
-
-interface RuleTier {
-  id?: string;
-  after_miles?: number | string;
-  after_minutes?: number | string;
-}
-
-interface PricingRuleRow {
-  id: string;
-  rule_name?: string | null;
-  rule_priority?: number | string | null;
-  apply_web_booker?: boolean | null;
-  pickup_area?: string | null;
-  dropoff_area?: string | null;
-  vehicles?: Record<string, RuleVehiclePricing> | null;
-  mile_tiers?: RuleTier[] | null;
-  minute_tiers?: RuleTier[] | null;
 }
 
 interface DirectionsLeg {
@@ -99,6 +74,9 @@ export interface BookingQuoteResult {
   duration_minutes: number;
   pricing_rule_id: string | null;
   pricing_rule_name: string | null;
+  /** Which billing policy applied: inside the base circle or base→pickup added. */
+  route_mode: string | null;
+  route_label: string | null;
   pricing_breakdown: {
     vehicle_label: string;
     start_price: number;
@@ -154,118 +132,6 @@ async function fetchGoogleJson<T>(url: string): Promise<T | null> {
   }
 
   return null;
-}
-
-function normalizeLabel(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function containsCaseInsensitive(haystack: string, needle: string): boolean {
-  if (!needle.trim()) return true;
-  return haystack.toLowerCase().includes(needle.trim().toLowerCase());
-}
-
-function vehicleCandidates(vehicleName: string): string[] {
-  const candidates = new Set<string>([vehicleName]);
-  const normalized = normalizeLabel(vehicleName);
-
-  if (normalized.includes("saloon")) {
-    candidates.add("Saloon");
-    candidates.add("Saloon Car");
-  }
-  if (normalized.includes("peoplecarrier") || normalized.includes("carrier")) {
-    candidates.add("People Carrier");
-  }
-  if (normalized.includes("minibus")) {
-    candidates.add("Minibus");
-    candidates.add("8 Seater Minibus");
-  }
-
-  return [...candidates];
-}
-
-function findVehiclePricing(
-  vehicles: Record<string, RuleVehiclePricing> | null | undefined,
-  vehicleName: string
-): { label: string; pricing: RuleVehiclePricing } | null {
-  if (!vehicles) return null;
-
-  const entries = Object.entries(vehicles);
-  const wanted = vehicleCandidates(vehicleName).map(normalizeLabel);
-
-  for (const [label, pricing] of entries) {
-    const normalizedLabel = normalizeLabel(label);
-    const matched = wanted.some(
-      (candidate) =>
-        candidate === normalizedLabel ||
-        candidate.includes(normalizedLabel) ||
-        normalizedLabel.includes(candidate)
-    );
-    if (matched) return { label, pricing };
-  }
-
-  return null;
-}
-
-function resolveTierRate(
-  metricValue: number,
-  baseRate: number,
-  tiers: RuleTier[] | null | undefined,
-  tierPrices: Record<string, number | string> | null | undefined,
-  thresholdField: "after_miles" | "after_minutes"
-): number {
-  if (!tiers?.length || !tierPrices) return baseRate;
-
-  const resolved = tiers
-    .map((tier) => ({
-      threshold: toNumber(tier[thresholdField], NaN),
-      price: toNumber(tier.id ? tierPrices[tier.id] : undefined, NaN),
-    }))
-    .filter((tier) => Number.isFinite(tier.threshold) && Number.isFinite(tier.price))
-    .sort((a, b) => a.threshold - b.threshold);
-
-  let rate = baseRate;
-  for (const tier of resolved) {
-    if (metricValue >= tier.threshold) {
-      rate = tier.price;
-    }
-  }
-  return rate;
-}
-
-function ruleScore(rule: PricingRuleRow, pickup: string, dropoff: string): number {
-  const pickupArea = rule.pickup_area?.trim() ?? "";
-  const dropoffArea = rule.dropoff_area?.trim() ?? "";
-
-  if (pickupArea && !containsCaseInsensitive(pickup, pickupArea)) return -1;
-  if (dropoffArea && !containsCaseInsensitive(dropoff, dropoffArea)) return -1;
-
-  let score = toNumber(rule.rule_priority, 0) * 10;
-  if (pickupArea) score += 2;
-  if (dropoffArea) score += 2;
-  if (!pickupArea && !dropoffArea) score += 1;
-  return score;
-}
-
-function choosePricingRule(
-  rules: PricingRuleRow[],
-  pickup: string,
-  dropoff: string
-): PricingRuleRow | null {
-  const eligible = rules.filter((rule) => rule.apply_web_booker !== false);
-  if (!eligible.length) return null;
-
-  const scored = eligible
-    .map((rule) => ({ rule, score: ruleScore(rule, pickup, dropoff) }))
-    .filter((entry) => entry.score >= 0)
-    .sort((a, b) => b.score - a.score);
-
-  if (scored.length) return scored[0].rule;
-
-  // Fallback: highest priority web rule if area matching was too strict.
-  return eligible.sort(
-    (a, b) => toNumber(b.rule_priority, 0) - toNumber(a.rule_priority, 0)
-  )[0];
 }
 
 async function tryGoogleDirections(
@@ -397,61 +263,53 @@ async function getRouteMetrics(points: string[], apiKey: string): Promise<RouteM
   return fallbackHaversineRoute(points, apiKey);
 }
 
-interface VehiclePricingResolved {
-  startPrice: number;
-  minPrice: number;
-  baseMilePrice: number;
-  baseMinutePrice: number;
-}
-
 async function computeLeg(
   pickup: string,
   dropoff: string,
   stops: string[],
   apiKey: string,
-  rule: PricingRuleRow,
-  pricing: RuleVehiclePricing,
-  resolved: VehiclePricingResolved
-): Promise<QuoteLegResult> {
+  vehicleType: string,
+  supabase: SupabaseClient
+): Promise<{ leg: QuoteLegResult; quote: ServiceAreaQuote }> {
   const points = [pickup, ...stops, dropoff];
   const route = await getRouteMetrics(points, apiKey);
 
-  const mileRate = resolveTierRate(
-    route.distanceMiles,
-    resolved.baseMilePrice,
-    rule.mile_tiers,
-    pricing.mile_tier_prices,
-    "after_miles"
-  );
-  const minuteRate = resolveTierRate(
-    route.durationMinutes,
-    resolved.baseMinutePrice,
-    rule.minute_tiers,
-    pricing.minute_tier_prices,
-    "after_minutes"
-  );
+  if (!route.pickupCoordinates || !route.dropoffCoordinates) {
+    throw new Error(
+      "Could not map trip coordinates. Please select full addresses from suggestions."
+    );
+  }
 
-  const subtotal =
-    resolved.startPrice +
-    route.distanceMiles * mileRate +
-    route.durationMinutes * minuteRate;
-  const fare = Math.max(subtotal, resolved.minPrice);
+  // The fare always comes from the service-area fare table, never from the
+  // client. Distance/duration are kept from the route lookup so the rider sees
+  // a realistic estimate; the price is the authoritative billed fare.
+  const quote = await quoteServiceAreaLeg(supabase, {
+    pickup: route.pickupCoordinates,
+    dropoff: route.dropoffCoordinates,
+    minutes: route.durationMinutes,
+    vehicleType,
+  });
 
-  return {
+  const leg: QuoteLegResult = {
     pickup,
     dropoff,
     stops,
     distance_miles: round(route.distanceMiles, 2),
     duration_minutes: Math.max(1, Math.round(route.durationMinutes)),
-    fare: round(fare, 2),
-    mile_rate: round(mileRate, 4),
-    minute_rate: round(minuteRate, 4),
-    pickup_latitude: route.pickupCoordinates?.lat ?? null,
-    pickup_longitude: route.pickupCoordinates?.lng ?? null,
-    dropoff_latitude: route.dropoffCoordinates?.lat ?? null,
-    dropoff_longitude: route.dropoffCoordinates?.lng ?? null,
+    fare: quote.price,
+    mile_rate: round(quote.breakdown.mileage / Math.max(quote.billed_miles, 0.001), 4),
+    minute_rate: round(
+      quote.breakdown.time / Math.max(route.durationMinutes, 0.001),
+      4
+    ),
+    pickup_latitude: route.pickupCoordinates.lat,
+    pickup_longitude: route.pickupCoordinates.lng,
+    dropoff_latitude: route.dropoffCoordinates.lat,
+    dropoff_longitude: route.dropoffCoordinates.lng,
     distance_source: route.source,
   };
+
+  return { leg, quote };
 }
 
 export async function calculateBookingQuote(
@@ -474,48 +332,17 @@ export async function calculateBookingQuote(
     throw new Error("Google API key is missing on the server.");
   }
 
-  const { data: rulesData, error: rulesError } = await supabase
-    .from("pricing_rules")
-    .select("*")
-    .eq("apply_web_booker", true);
-
-  if (rulesError) {
-    throw new Error(`Failed to load pricing rules: ${rulesError.message}`);
-  }
-
-  const rules = (rulesData ?? []) as PricingRuleRow[];
-  const selectedRule = choosePricingRule(rules, pickup, dropoff);
-  if (!selectedRule) {
-    throw new Error("No web-booker pricing rule is configured.");
-  }
-
-  const vehicleMatch = findVehiclePricing(selectedRule.vehicles, payload.vehicle);
-  if (!vehicleMatch) {
-    throw new Error(`Pricing for vehicle "${payload.vehicle}" is not configured.`);
-  }
-
-  if (vehicleMatch.pricing.enabled === false) {
-    throw new Error(`Vehicle "${vehicleMatch.label}" is disabled in pricing rules.`);
-  }
-
-  const resolved: VehiclePricingResolved = {
-    startPrice: toNumber(vehicleMatch.pricing.start_price, 0),
-    minPrice: toNumber(vehicleMatch.pricing.min_price, 0),
-    baseMilePrice: toNumber(vehicleMatch.pricing.base_mile_price, 0),
-    baseMinutePrice: toNumber(vehicleMatch.pricing.base_minute_price, 0),
-  };
-
-  const outbound = await computeLeg(
+  const { leg: outbound, quote: outboundQuote } = await computeLeg(
     pickup,
     dropoff,
     stops,
     apiKey,
-    selectedRule,
-    vehicleMatch.pricing,
-    resolved
+    payload.vehicle,
+    supabase
   );
 
   let returnLeg: QuoteLegResult | null = null;
+  let returnQuote: ServiceAreaQuote | null = null;
   if (payload.return_journey) {
     const returnPickup = (payload.return_pickup ?? dropoff).trim();
     const returnDropoff = (payload.return_dropoff ?? pickup).trim();
@@ -523,15 +350,16 @@ export async function calculateBookingQuote(
       .map((stop) => stop.trim())
       .filter(Boolean);
 
-    returnLeg = await computeLeg(
+    const computed = await computeLeg(
       returnPickup,
       returnDropoff,
       returnStops,
       apiKey,
-      selectedRule,
-      vehicleMatch.pricing,
-      resolved
+      payload.vehicle,
+      supabase
     );
+    returnLeg = computed.leg;
+    returnQuote = computed.quote;
   }
 
   const totalFare = round(outbound.fare + (returnLeg?.fare ?? 0), 2);
@@ -552,12 +380,14 @@ export async function calculateBookingQuote(
     estimated_fare: totalFare,
     distance_miles: totalDistance,
     duration_minutes: totalDuration,
-    pricing_rule_id: selectedRule.id ?? null,
-    pricing_rule_name: selectedRule.rule_name ?? null,
+    pricing_rule_id: null,
+    pricing_rule_name: outboundQuote.route_label,
+    route_mode: outboundQuote.route_mode,
+    route_label: outboundQuote.route_label,
     pricing_breakdown: {
-      vehicle_label: vehicleMatch.label,
-      start_price: round(resolved.startPrice, 2),
-      min_price: round(resolved.minPrice, 2),
+      vehicle_label: outboundQuote.vehicle,
+      start_price: outboundQuote.breakdown.start,
+      min_price: outboundQuote.min_price,
       outbound_distance_miles: outbound.distance_miles,
       outbound_duration_minutes: outbound.duration_minutes,
       outbound_fare: outbound.fare,
