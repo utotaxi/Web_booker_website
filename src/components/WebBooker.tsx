@@ -72,6 +72,8 @@ interface BookingQuotePreview {
   distance_miles: number;
   duration_minutes: number;
   pricing_rule_name: string | null;
+  /** Billing policy applied: pickup→drop-off vs base→pickup→drop-off. */
+  route_label?: string | null;
   distance_source: "google_directions" | "haversine_estimate";
   currency: "GBP";
   outbound?: QuoteLegPreview;
@@ -827,6 +829,11 @@ export default function WebBooker() {
                     {" · "}
                     <strong>Duration:</strong> {confirmedQuote.duration_minutes} mins
                   </p>
+                  {confirmedQuote.route_label && (
+                    <p>
+                      <strong>Pricing:</strong> {confirmedQuote.route_label}
+                    </p>
+                  )}
                 </>
               )}
             </div>
@@ -884,6 +891,9 @@ export default function WebBooker() {
               {(quote?.distance_miles ?? 0).toFixed(2)} miles · {quote?.duration_minutes ?? 0} mins
               {showReturn ? " · Return trip included" : ""}
             </p>
+            {quote?.route_label && (
+              <p className="mt-1 text-xs text-emerald-700">{quote.route_label}</p>
+            )}
           </div>
 
           <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -1568,6 +1578,9 @@ export default function WebBooker() {
                     ? " · Approximate route distance"
                     : ""}
                 </p>
+                {quote.route_label && (
+                  <p className="mt-1 text-xs text-emerald-700">{quote.route_label}</p>
+                )}
                 {quote.return_leg && quote.outbound && (
                   <p className="mt-1 text-xs text-emerald-700">
                     Outbound £{quote.outbound.fare.toFixed(2)} ({quote.outbound.distance_miles.toFixed(2)} mi)

@@ -332,6 +332,7 @@ export async function POST(req: NextRequest) {
       return_duration_minutes: quote.return_leg?.duration_minutes ?? null,
       return_fare: quote.return_leg?.fare ?? null,
       estimated_fare: chargeableFare,
+      estimated_price: chargeableFare,
       fare: chargeableFare,
       original_fare: quote.estimated_fare,
       coupon_id: appliedCoupon?.id ?? null,
