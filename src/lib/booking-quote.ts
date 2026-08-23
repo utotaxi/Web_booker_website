@@ -74,10 +74,10 @@ export interface BookingQuoteResult {
   duration_minutes: number;
   pricing_rule_id: string | null;
   pricing_rule_name: string | null;
-  /** Which billing policy applied: inside the base circle or base→pickup added. */
+  /** Billing policy: inside, inbound to the circle, or base→pickup added. */
   route_mode: string | null;
   route_label: string | null;
-  /** `pricing_rules` inside the circle; `service_area_base_pricing` beyond it. */
+  /** `pricing_rules` inside/inbound; `service_area_base_pricing` outbound/beyond. */
   pricing_source: string | null;
   pricing_breakdown: {
     vehicle_label: string;
@@ -282,9 +282,10 @@ async function computeLeg(
     );
   }
 
-  // Fare comes from pricing_rules (inside the circle) or
-  // service_area_base_pricing (beyond it). Distance/duration stay from the
-  // route lookup so the rider sees a realistic estimate.
+  // Fare comes from pricing_rules (inside the circle, or inbound
+  // elsewhere → service area) or service_area_base_pricing (outbound /
+  // beyond). Distance/duration stay from the route lookup so the rider sees
+  // a realistic estimate.
   const quote = await quoteServiceAreaLeg(supabase, {
     pickup: route.pickupCoordinates,
     dropoff: route.dropoffCoordinates,
