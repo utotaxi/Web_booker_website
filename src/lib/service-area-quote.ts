@@ -3,18 +3,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 /**
  * Service-area fare pricing for the web booker.
  *
- * This mirrors the admin panel's quote logic exactly (same tables, same
- * algorithm) so the rider-facing booker and the admin console always quote the
- * identical fare for the same trip:
+ * Circle check (base service area, `area_type === "circle"`):
+ *  - Inside: both pickup and drop-off are within the circle radius.
+ *    Fare uses `pricing_rules` and bills pickup → drop-off only.
+ *  - Outside: either point is beyond the circle (or no circle is configured).
+ *    Fare uses `service_area_base_pricing` and bills
+ *    base → pickup → drop-off (dead mileage from the circle centre).
  *
- *  - If both pickup and drop-off fall inside the base service-area circle, the
- *    fare covers pickup → drop-off only.
- *  - If either point is outside the circle, the dead mileage from the base to
- *    the pickup is included (base → pickup → drop-off).
- *
- * A fare can only be produced when a pricing rule is configured; otherwise a
- * `PricingUnavailableError` is thrown and the caller blocks booking with
- * "Pricing unavailable — contact dispatch".
+ * A fare can only be produced when the matching table has a web-booker rule;
+ * otherwise a `PricingUnavailableError` is thrown and the caller blocks
+ * booking with "Pricing unavailable — contact dispatch".
  */
 
 export type LatLng = { lat: number; lng: number };
@@ -60,10 +58,24 @@ interface PricingRuleRow {
   rule_type?: string | null;
   rule_name?: string | null;
   service_area_id?: string | null;
+  apply_web_booker?: boolean | null;
   vehicles?: Record<string, unknown> | null;
   mile_tiers?: MileTier[] | null;
   minute_tiers?: MinuteTier[] | null;
 }
+
+interface BasePricingRow {
+  id?: string;
+  rule_name?: string | null;
+  service_area_id?: string | null;
+  calculation?: string | null;
+  apply_web_booker?: boolean | null;
+  vehicles?: Record<string, unknown> | null;
+  mile_tiers?: MileTier[] | null;
+  minute_tiers?: MinuteTier[] | null;
+}
+
+export type PricingSource = "pricing_rules" | "service_area_base_pricing";
 
 export function isServiceAreaPricingRule(
   rule: { rule_type?: string | null } | null | undefined
@@ -71,24 +83,56 @@ export function isServiceAreaPricingRule(
   return (rule?.rule_type || "") === "Service area";
 }
 
-export function findMainPricingRule<T extends { rule_type?: string | null }>(
-  rules: T[]
-): T | null {
-  return rules.find((r) => !isServiceAreaPricingRule(r)) || null;
+function appliesToWebBooker(row: {
+  apply_web_booker?: boolean | null;
+}): boolean {
+  return row.apply_web_booker !== false;
+}
+
+export function findMainPricingRule<
+  T extends { rule_type?: string | null; apply_web_booker?: boolean | null }
+>(rules: T[]): T | null {
+  return (
+    rules.find((r) => !isServiceAreaPricingRule(r) && appliesToWebBooker(r)) ||
+    null
+  );
 }
 
 export function findPricingRuleForServiceArea<
-  T extends { rule_type?: string | null; service_area_id?: string | null }
+  T extends {
+    rule_type?: string | null;
+    service_area_id?: string | null;
+    apply_web_booker?: boolean | null;
+  }
 >(rules: T[], serviceAreaId?: string | null): T | null {
+  const candidates = rules.filter(
+    (r) => isServiceAreaPricingRule(r) && appliesToWebBooker(r)
+  );
   if (serviceAreaId) {
-    const linked = rules.find(
-      (r) => isServiceAreaPricingRule(r) && r.service_area_id === serviceAreaId
-    );
+    const linked = candidates.find((r) => r.service_area_id === serviceAreaId);
     if (linked) return linked;
   }
-  return rules.find(
-    (r) => isServiceAreaPricingRule(r) && !r.service_area_id
-  ) || null;
+  return candidates.find((r) => !r.service_area_id) || null;
+}
+
+export function findBasePricingForServiceArea<
+  T extends {
+    service_area_id?: string | null;
+    calculation?: string | null;
+    apply_web_booker?: boolean | null;
+  }
+>(rows: T[], serviceAreaId?: string | null): T | null {
+  const web = rows.filter(appliesToWebBooker);
+  const pool = web.length ? web : rows;
+  if (serviceAreaId) {
+    const linked = pool.find((r) => r.service_area_id === serviceAreaId);
+    if (linked) return linked;
+  }
+  return (
+    pool.find((r) => (r.calculation || "") === "base_pickup_dropoff") ||
+    pool[0] ||
+    null
+  );
 }
 
 export function metersToMiles(meters: number): number {
@@ -307,6 +351,9 @@ export interface ServiceAreaQuote {
   billed_miles: number;
   route_mode: RouteMode;
   route_label: string;
+  pricing_source: PricingSource;
+  pricing_rule_id: string | null;
+  pricing_rule_name: string | null;
   vehicle: string;
   min_price: number;
   breakdown: { start: number; mileage: number; time: number };
@@ -319,31 +366,44 @@ export interface ServiceAreaQuote {
 }
 
 async function loadQuoteInputs(supabase: SupabaseClient) {
-  const [{ data: areas, error: areasError }, { data: rules, error: rulesError }] =
-    await Promise.all([
-      supabase
-        .from("service_areas")
-        .select("*")
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("pricing_rules")
-        .select("*")
-        .order("created_at", { ascending: false }),
-    ]);
+  const [
+    { data: areas, error: areasError },
+    { data: rules, error: rulesError },
+    { data: basePricing, error: basePricingError },
+  ] = await Promise.all([
+    supabase
+      .from("service_areas")
+      .select("*")
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("pricing_rules")
+      .select("*")
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("service_area_base_pricing")
+      .select("*")
+      .order("created_at", { ascending: false }),
+  ]);
 
-  if (areasError || rulesError) {
+  if (areasError) {
     throw new PricingUnavailableError();
   }
 
   return {
     areas: (areas ?? []) as ServiceAreaRow[],
-    rules: (rules ?? []) as PricingRuleRow[],
+    rules: rulesError ? [] : ((rules ?? []) as PricingRuleRow[]),
+    basePricing: basePricingError
+      ? []
+      : ((basePricing ?? []) as BasePricingRow[]),
   };
 }
 
 /**
- * Price a single leg (pickup → dropoff) using the service-area fare table.
- * Throws `PricingUnavailableError` when no pricing rule is configured.
+ * Price a single leg (pickup → dropoff).
+ *
+ * Inside the base circle → `pricing_rules`.
+ * Beyond the circle → `service_area_base_pricing` with base → pickup → drop-off miles.
+ * Throws `PricingUnavailableError` when the required table has no rule.
  */
 export async function quoteServiceAreaLeg(
   supabase: SupabaseClient,
@@ -354,7 +414,7 @@ export async function quoteServiceAreaLeg(
     vehicleType?: string | null;
   }
 ): Promise<ServiceAreaQuote> {
-  const { areas, rules } = await loadQuoteInputs(supabase);
+  const { areas, rules, basePricing } = await loadQuoteInputs(supabase);
 
   const baseArea = findBaseServiceArea(areas);
   const center = baseArea?.coordinates?.[0]
@@ -371,14 +431,17 @@ export async function quoteServiceAreaLeg(
     radiusMiles,
   });
 
-  const serviceAreaRule = findPricingRuleForServiceArea(rules, baseArea?.id);
-  const mainRule = findMainPricingRule(rules);
-  const rule =
-    route.mode === "inside_pickup_dropoff"
-      ? serviceAreaRule || mainRule
-      : mainRule || serviceAreaRule;
+  const insideCircle = route.mode === "inside_pickup_dropoff";
+  const insideRule = insideCircle
+    ? findPricingRuleForServiceArea(rules, baseArea?.id) ||
+      findMainPricingRule(rules)
+    : null;
+  const outsideRule = insideCircle
+    ? null
+    : findBasePricingForServiceArea(basePricing, baseArea?.id);
 
-  if (!rule) {
+  const selected = insideCircle ? insideRule : outsideRule;
+  if (!selected) {
     throw new PricingUnavailableError();
   }
 
@@ -386,9 +449,9 @@ export async function quoteServiceAreaLeg(
     miles: route.miles,
     minutes: params.minutes ?? 0,
     vehicleType: params.vehicleType ?? "economy",
-    vehicles: (rule.vehicles || {}) as Record<string, unknown>,
-    mileTiers: rule.mile_tiers || [],
-    minuteTiers: rule.minute_tiers || [],
+    vehicles: (selected.vehicles || {}) as Record<string, unknown>,
+    mileTiers: selected.mile_tiers || [],
+    minuteTiers: selected.minute_tiers || [],
   });
 
   return {
@@ -396,6 +459,11 @@ export async function quoteServiceAreaLeg(
     billed_miles: round(route.miles),
     route_mode: route.mode,
     route_label: describeRouteMode(route.mode),
+    pricing_source: insideCircle
+      ? "pricing_rules"
+      : "service_area_base_pricing",
+    pricing_rule_id: selected.id ?? null,
+    pricing_rule_name: selected.rule_name ?? null,
     vehicle: fare.vehicle,
     min_price: fare.minPrice,
     breakdown: { start: fare.start, mileage: fare.mileage, time: fare.time },
