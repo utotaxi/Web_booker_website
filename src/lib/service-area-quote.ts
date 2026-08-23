@@ -6,9 +6,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * Circle check (base service area, `area_type === "circle"`):
  *  - Inside: both pickup and drop-off are within the circle radius.
  *    Fare uses `pricing_rules` and bills pickup → drop-off only.
- *  - Outside: either point is beyond the circle (or no circle is configured).
- *    Fare uses `service_area_base_pricing` and bills
- *    base → pickup → drop-off (dead mileage from the circle centre).
+ *  - Inbound: pickup is outside the circle, drop-off is inside
+ *    (elsewhere → service area). Fare uses `pricing_rules` and bills
+ *    pickup → drop-off only — no dead mileage from the base.
+ *  - Outbound / beyond: pickup is inside and drop-off is outside, or both
+ *    points are outside (or no circle is configured). Fare uses
+ *    `service_area_base_pricing` and bills base → pickup → drop-off.
  *
  * A fare can only be produced when the matching table has a web-booker rule;
  * otherwise a `PricingUnavailableError` is thrown and the caller blocks
@@ -17,11 +20,21 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type LatLng = { lat: number; lng: number };
 
-export type RouteMode = "inside_pickup_dropoff" | "outside_base_pickup_dropoff";
+export type RouteMode =
+  | "inside_pickup_dropoff"
+  | "inbound_pickup_dropoff"
+  | "outside_base_pickup_dropoff";
 
 export const INSIDE_CIRCLE_CALCULATION = "Pickup Address → Drop-off Address";
+export const INBOUND_CIRCLE_CALCULATION = "Pickup Address → Drop-off Address";
 export const OUTSIDE_CIRCLE_CALCULATION =
   "Base Address → Pickup Address → Drop-off Address";
+
+/** True when the trip is billed pickup → drop-off from `pricing_rules`. */
+export function usesPricingRulesTable(mode: RouteMode): boolean {
+  return mode === "inside_pickup_dropoff" || mode === "inbound_pickup_dropoff";
+}
+
 export const BASE_SERVICE_AREA_MARKER = "Role: Base";
 export const METERS_PER_MILE = 1609.34;
 
@@ -173,9 +186,10 @@ export function resolveRouteMode(
   if (!center || radiusMiles <= 0) return "outside_base_pickup_dropoff";
   const pickupIn = isWithinCircle(pickup, center, radiusMiles);
   const dropoffIn = isWithinCircle(dropoff, center, radiusMiles);
-  return pickupIn && dropoffIn
-    ? "inside_pickup_dropoff"
-    : "outside_base_pickup_dropoff";
+  if (pickupIn && dropoffIn) return "inside_pickup_dropoff";
+  // Elsewhere → service area: inward trip, no dead-head from the base.
+  if (!pickupIn && dropoffIn) return "inbound_pickup_dropoff";
+  return "outside_base_pickup_dropoff";
 }
 
 export type RouteLeg = {
@@ -194,7 +208,7 @@ export function billedRoute(params: {
   const mode = resolveRouteMode(pickup, dropoff, center, radiusMiles);
   const pickupToDropoff = haversineMiles(pickup, dropoff);
 
-  if (mode === "inside_pickup_dropoff") {
+  if (usesPricingRulesTable(mode)) {
     return {
       miles: pickupToDropoff,
       mode,
@@ -216,6 +230,7 @@ export function billedRoute(params: {
 }
 
 export function describeRouteMode(mode: RouteMode): string {
+  if (mode === "inbound_pickup_dropoff") return INBOUND_CIRCLE_CALCULATION;
   return mode === "inside_pickup_dropoff"
     ? INSIDE_CIRCLE_CALCULATION
     : OUTSIDE_CIRCLE_CALCULATION;
@@ -401,8 +416,10 @@ async function loadQuoteInputs(supabase: SupabaseClient) {
 /**
  * Price a single leg (pickup → dropoff).
  *
- * Inside the base circle → `pricing_rules`.
- * Beyond the circle → `service_area_base_pricing` with base → pickup → drop-off miles.
+ * Inside the circle, or inbound (elsewhere → service area) → `pricing_rules`
+ * with pickup → drop-off miles.
+ * Outbound / beyond the circle → `service_area_base_pricing` with
+ * base → pickup → drop-off miles.
  * Throws `PricingUnavailableError` when the required table has no rule.
  */
 export async function quoteServiceAreaLeg(
@@ -431,16 +448,11 @@ export async function quoteServiceAreaLeg(
     radiusMiles,
   });
 
-  const insideCircle = route.mode === "inside_pickup_dropoff";
-  const insideRule = insideCircle
+  const usePricingRules = usesPricingRulesTable(route.mode);
+  const selected = usePricingRules
     ? findPricingRuleForServiceArea(rules, baseArea?.id) ||
       findMainPricingRule(rules)
-    : null;
-  const outsideRule = insideCircle
-    ? null
     : findBasePricingForServiceArea(basePricing, baseArea?.id);
-
-  const selected = insideCircle ? insideRule : outsideRule;
   if (!selected) {
     throw new PricingUnavailableError();
   }
@@ -459,7 +471,7 @@ export async function quoteServiceAreaLeg(
     billed_miles: round(route.miles),
     route_mode: route.mode,
     route_label: describeRouteMode(route.mode),
-    pricing_source: insideCircle
+    pricing_source: usePricingRules
       ? "pricing_rules"
       : "service_area_base_pricing",
     pricing_rule_id: selected.id ?? null,
