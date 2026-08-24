@@ -9,9 +9,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *  - Inbound: pickup is outside the circle, drop-off is inside
  *    (elsewhere → service area). Fare uses `pricing_rules` and bills
  *    pickup → drop-off only — no dead mileage from the base.
- *  - Outbound / beyond: pickup is inside and drop-off is outside, or both
- *    points are outside (or no circle is configured). Fare uses
- *    `service_area_base_pricing` and bills base → pickup → drop-off.
+ *  - Outbound: pickup is inside the circle, drop-off is outside
+ *    (service area → elsewhere). Fare uses `pricing_rules` and bills
+ *    pickup → drop-off only.
+ *  - Beyond: both points are outside (or no circle is configured). Fare
+ *    uses `service_area_base_pricing` and bills base → pickup → drop-off.
  *
  * A fare can only be produced when the matching table has a web-booker rule;
  * otherwise a `PricingUnavailableError` is thrown and the caller blocks
@@ -23,16 +25,22 @@ export type LatLng = { lat: number; lng: number };
 export type RouteMode =
   | "inside_pickup_dropoff"
   | "inbound_pickup_dropoff"
+  | "outbound_pickup_dropoff"
   | "outside_base_pickup_dropoff";
 
 export const INSIDE_CIRCLE_CALCULATION = "Pickup Address → Drop-off Address";
 export const INBOUND_CIRCLE_CALCULATION = "Pickup Address → Drop-off Address";
+export const OUTBOUND_CIRCLE_CALCULATION = "Pickup Address → Drop-off Address";
 export const OUTSIDE_CIRCLE_CALCULATION =
   "Base Address → Pickup Address → Drop-off Address";
 
 /** True when the trip is billed pickup → drop-off from `pricing_rules`. */
 export function usesPricingRulesTable(mode: RouteMode): boolean {
-  return mode === "inside_pickup_dropoff" || mode === "inbound_pickup_dropoff";
+  return (
+    mode === "inside_pickup_dropoff" ||
+    mode === "inbound_pickup_dropoff" ||
+    mode === "outbound_pickup_dropoff"
+  );
 }
 
 export const BASE_SERVICE_AREA_MARKER = "Role: Base";
@@ -189,6 +197,8 @@ export function resolveRouteMode(
   if (pickupIn && dropoffIn) return "inside_pickup_dropoff";
   // Elsewhere → service area: inward trip, no dead-head from the base.
   if (!pickupIn && dropoffIn) return "inbound_pickup_dropoff";
+  // Service area → elsewhere: still `pricing_rules`, pickup → drop-off only.
+  if (pickupIn && !dropoffIn) return "outbound_pickup_dropoff";
   return "outside_base_pickup_dropoff";
 }
 
@@ -231,6 +241,7 @@ export function billedRoute(params: {
 
 export function describeRouteMode(mode: RouteMode): string {
   if (mode === "inbound_pickup_dropoff") return INBOUND_CIRCLE_CALCULATION;
+  if (mode === "outbound_pickup_dropoff") return OUTBOUND_CIRCLE_CALCULATION;
   return mode === "inside_pickup_dropoff"
     ? INSIDE_CIRCLE_CALCULATION
     : OUTSIDE_CIRCLE_CALCULATION;
@@ -416,9 +427,9 @@ async function loadQuoteInputs(supabase: SupabaseClient) {
 /**
  * Price a single leg (pickup → dropoff).
  *
- * Inside the circle, or inbound (elsewhere → service area) → `pricing_rules`
- * with pickup → drop-off miles.
- * Outbound / beyond the circle → `service_area_base_pricing` with
+ * Inside the circle, inbound (elsewhere → service area), or outbound
+ * (service area → elsewhere) → `pricing_rules` with pickup → drop-off miles.
+ * Both points beyond the circle → `service_area_base_pricing` with
  * base → pickup → drop-off miles.
  * Throws `PricingUnavailableError` when the required table has no rule.
  */
